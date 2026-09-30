@@ -1,5 +1,14 @@
 # Versione 2 — 30 settembre 2026
 
+## Aggiornamento interfaccia
+
+- Aggiunto **Installa app**: usa la finestra di installazione nativa quando disponibile e mostra istruzioni adatte negli altri browser.
+- Aggiunto **Scarica HTML**: crea una copia portatile a file singolo, utilizzabile offline e rinominabile.
+- Esposta la versione applicativa `2.2.0` nell’intestazione, nel piè di pagina e nella guida.
+- Aggiunto **Aggiornamenti**, con controllo della versione pubblicata tramite `version.json` e aggiornamento guidato.
+- Trasformata la guida rapida in una guida completa a tutte le funzioni e ai principali limiti.
+- Cache PWA aggiornata a `turni-v4` per distribuire subito la nuova interfaccia.
+
 ## Correzioni
 
 - La soglia di formazione conta solo affiancamenti nei mesi precedenti e, nel mese corrente, nei giorni precedenti al turno. I mesi futuri non abilitano i turni passati.

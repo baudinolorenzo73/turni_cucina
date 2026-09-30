@@ -65,6 +65,14 @@
     border-bottom:1px solid var(--line);padding:12px 16px}
   header h1{font-size:16px;margin:0}
   header p{font-size:11px;color:var(--muted);margin:4px 0 0}
+  .azioni-app{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+  #msgAzioniApp{font-size:10px;color:var(--muted);margin-top:6px;text-align:right}
+  .header-main{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+  @media (max-width:700px){
+    .header-main{flex-direction:column}
+    .azioni-app{justify-content:flex-start}
+    #msgAzioniApp{text-align:left}
+  }
   .firma{font-size:10px;color:var(--muted);opacity:.75}
   main{max-width:900px;margin:0 auto;padding:12px}
 
@@ -161,6 +169,7 @@
   #backdropAiuto.show, #backdropConfig.show, #backdropContatti.show{display:flex}
   #modaleAiuto, #modaleConfig, #modaleContatti{background:var(--modal-bg);color:var(--ink);border-radius:14px;max-width:480px;width:100%;max-height:85vh;
     overflow-y:auto;padding:20px 22px}
+  #modaleAiuto{max-width:720px}
   #modaleAiuto h2, #modaleConfig h2, #modaleContatti h2{margin-top:0;font-size:17px}
   #modaleAiuto h3, #modaleConfig h3{font-size:13px;margin:16px 0 4px}
   #modaleAiuto ol{padding-left:20px;font-size:13px;line-height:1.6;margin:8px 0}
@@ -237,15 +246,21 @@
 </head>
 <body>
 <header>
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+  <div class="header-main">
     <div>
       <h1>Generatore Turni — Cucina / Servizio</h1>
-      <p class="firma">by Lollo ®2026</p>
+      <p class="firma">by Lollo ®2026 · Versione <span class="numeroVersioneApp">2.2.0</span></p>
     </div>
-    <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
+    <div>
+    <div class="azioni-app">
+      <button class="btn mini" id="btnInstallaApp">⬇ Installa app</button>
+      <button class="btn mini secondary" id="btnScaricaPortatile">⇩ Scarica HTML</button>
+      <button class="btn mini secondary" id="btnControllaAggiornamenti">↻ Aggiornamenti</button>
       <button class="btn mini secondary" id="btnConfig">⚙ Config</button>
       <button class="btn mini secondary" id="btnAiuto">? Aiuto</button>
       <button class="btn mini secondary" id="btnContatti">✉ Contatti</button>
+    </div>
+    <div id="msgAzioniApp" role="status" aria-live="polite"></div>
     </div>
   </div>
 </header>
@@ -456,24 +471,36 @@
   </section>
   <div id="areaStampa"></div>
 </main>
-<footer>Generatore Turni · funziona interamente offline · i dati restano solo su questo dispositivo<br>by Lollo ®2026</footer>
+<footer>Generatore Turni · funziona interamente offline · i dati restano solo su questo dispositivo<br>by Lollo ®2026 · Versione <span class="numeroVersioneApp">2.2.0</span></footer>
 
 <div id="backdropAiuto">
-  <div id="modaleAiuto" role="dialog" aria-label="Guida rapida">
-    <h2>Guida rapida</h2>
-    <p>Il generatore funziona meglio se segui le schede in ordine, dall'alto verso il basso.</p>
+  <div id="modaleAiuto" role="dialog" aria-label="Guida completa">
+    <h2>Guida completa · Generatore Turni</h2>
+    <p><b>Versione <span class="numeroVersioneApp">2.2.0</span></b>. L’app crea un piano mensile per CUCINA e SERVIZIO, conserva i dati solo sul dispositivo e continua a funzionare senza Internet dopo la prima apertura.</p>
+    <h3>Procedura consigliata</h3>
     <ol>
-      <li><b>Progetto</b> — dai un nome al progetto (facoltativo), scegli mese e anno. Il "codice variante" ti serve solo se vuoi poter rigenerare esattamente lo stesso piano in un secondo momento: lascialo vuoto se non ti interessa.</li>
-      <li><b>Persone</b> — aggiungi chi lavora nel mese. Per ognuna puoi limitare i ruoli, impostare un minimo di turni desiderato o escluderla temporaneamente senza cancellarla.</li>
-      <li><b>Indisponibilità</b> — segna le date in cui una persona non può mai essere messa in turno (ferie, permessi, giorni fissi liberi...).</li>
-      <li><b>Turni Fissi</b> — se sai già che un giorno/ruolo va a una persona precisa, fissalo qui: il generatore lo rispetterà sempre. Nella stessa scheda scegli i giorni degli affiancamenti, che restano anche rigenerando.</li>
-      <li><b>Regole</b> — attiva solo i vincoli che ti servono davvero: più regole attivi insieme, più diventa difficile trovare un piano valido. Ogni regola ha un pulsante "i" con la spiegazione.</li>
-      <li><b>Genera</b> — premi Genera per creare il piano. Se il risultato non ti convince, "Proponi una variante diversa" ne prova un'altra senza dover cambiare nulla. Puoi anche toccare un nome nel calendario per cambiarlo a mano, o bloccarlo (icona 🔓) per fissarlo e rigenerare solo il resto.</li>
-      <li><b>Export</b> — scarica il piano in Word, Excel o PDF, stampalo o condividilo. Se cambi qualcosa dopo aver generato, il piano viene invalidato automaticamente e va rigenerato prima di esportare.</li>
+      <li><b>Progetto</b> — assegna un nome, scegli mese e anno. Il codice variante rende la generazione riproducibile: con gli stessi dati e lo stesso codice ottieni lo stesso piano.</li>
+      <li><b>Persone</b> — aggiungi i partecipanti. Per ogni persona scegli Cucina, Servizio o entrambi; puoi indicare un minimo desiderato, escluderla temporaneamente e richiedere un numero di affiancamenti prima dei turni autonomi.</li>
+      <li><b>Indisponibilità</b> — inserisci singoli giorni, intervalli, giorni settimanali ricorrenti, mesi interi oppure il primo/ultimo weekend. Sono vincoli obbligatori.</li>
+      <li><b>Turni Fissi</b> — assegna in anticipo persona, giorno e ruolo. Puoi anche programmare affiancamenti e creare giornate speciali con squadre numerose.</li>
+      <li><b>Regole</b> — configura riposo, weekend, massimo settimanale e bilanciamento. Le regole personalizzate permettono limiti individuali, coppie da evitare o preferire e giorni preferiti o vietati.</li>
+      <li><b>Genera</b> — crea il piano oppure una variante. Il calcolo può essere annullato. Nel calendario puoi modificare i nomi, aggiungere affiancamenti e trasformare un’assegnazione in turno fisso con 🔓.</li>
+      <li><b>Export</b> — controlla riepilogo e avvisi, scegli calendario o elenco, quindi esporta in Word, Excel o PDF, stampa o condividi.</li>
     </ol>
-    <h3>Da ricordare</h3>
-    <p>Il progetto si salva da solo nel browser a ogni modifica. Per portarlo su un altro dispositivo o tenerne una copia di sicurezza, usa "Salva" nella sezione Salvataggio &amp; backup della scheda Progetto.</p>
-    <p>Ordine di priorità: turni fissi sempre prima di tutto, poi i vincoli obbligatori (ruoli, esclusione, indisponibilità, regole standard e personalizzate vincolanti), infine le preferenze (coppie, date, minimo turni...) che valgono solo tra le opzioni rimaste valide. Regole doppie identiche vengono bloccate subito; regole in contraddizione fra loro restano permesse ma con un avviso dopo la generazione.</p>
+    <h3>Priorità e significato delle regole</h3>
+    <p><b>Turni fissi</b>: hanno priorità assoluta e possono produrre una deroga segnalata. <b>Vincoli obbligatori</b>: ruoli consentiti, esclusioni, indisponibilità, riposo, massimi e regole personalizzate vincolanti. <b>Preferenze</b>: minimo turni, equilibrio dei weekend, alternanza dei ruoli, date e coppie preferite; vengono rispettate quando rimangono più scelte valide.</p>
+    <p>Gli affiancamenti contano per la formazione solo se precedono il turno autonomo. Affiancamenti e squadre partecipano ai controlli di riposo e presenza, ma nel riepilogo sono indicati come <b>Supporto</b>, separati dai turni normali.</p>
+    <h3>Modifiche manuali, Annulla e Ripristina</h3>
+    <p>Una modifica che introduce un nuovo conflitto richiede conferma. <b>Annulla modifica</b> e <b>Ripristina modifica</b> gestiscono fino a 20 operazioni della sessione; la cronologia si azzera chiudendo l’app. Le modifiche manuali vengono salvate anche nello storico mensile.</p>
+    <h3>Archivio, salvataggio e backup</h3>
+    <p>Il progetto si salva automaticamente nel browser. <b>Salva</b> scarica un backup JSON completo; <b>Carica</b> lo importa su questo o su un altro dispositivo. “Salva ora nel browser” non sostituisce il backup: cancellando i dati del sito si perde la copia locale. L’Archivio mensile permette di ripristinare i nuovi piani insieme ai relativi vincoli.</p>
+    <h3>Installazione, versione portatile e aggiornamenti</h3>
+    <p><b>Installa app</b> installa la PWA quando il browser lo consente; su iPhone/iPad mostra le istruzioni per “Aggiungi alla schermata Home”. <b>Scarica HTML</b> crea un singolo file portatile, rinominabile e utilizzabile offline. I dati della versione portatile e quelli del sito possono essere memorie separate: usa il backup JSON per trasferirli.</p>
+    <p><b>Aggiornamenti</b> confronta questa versione con quella pubblicata. Se ne trova una più recente, propone di caricarla. Il controllo richiede Internet; prima di aggiornare è prudente scaricare un backup JSON.</p>
+    <h3>Export e avvisi</h3>
+    <p>Il PDF adatta automaticamente pagine e nomi lunghi; Word ed Excel restano modificabili. Se il piano contiene deroghe o modifiche manuali non conformi, l’app mostra gli avvisi e chiede conferma prima dell’esportazione.</p>
+    <h3>Quando non trova una soluzione</h3>
+    <p>Controlla prima persone abilitate, indisponibilità, affiancamenti richiesti e massimi. Poi prova un altro codice variante o allenta un vincolo. La ricerca usa molti tentativi, ma non può dimostrare matematicamente che una soluzione sia impossibile.</p>
     <button class="btn mini secondary chiudiAiuto" id="btnChiudiAiuto">Chiudi</button>
     <p class="firma" style="margin-top:16px;text-align:center">by Lollo ®2026</p>
   </div>
@@ -511,6 +538,8 @@
 const MESI = ["","Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio",
   "Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 const GIORNI_SETT = ["Lun","Mar","Mer","Gio","Ven","Sab","Dom"];
+const APP_VERSION = "2.2.0";
+const APP_BUILD = "2026-09-30";
 
 let state = {
   skin: "chiaro",
@@ -3481,6 +3510,152 @@ function initContatti(){
   backdrop.onclick = (e)=>{ if(e.target===backdrop) backdrop.classList.remove("show"); };
 }
 
+/* ======================= INSTALLAZIONE E VERSIONE PORTATILE ======================= */
+let eventoInstallazione = null;
+function appInstallata(){
+  return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone===true;
+}
+function aggiornaPulsanteInstalla(){
+  const btn=document.getElementById("btnInstallaApp");
+  if(!btn)return;
+  if(appInstallata()){
+    btn.textContent="✓ App installata";
+    btn.disabled=true;
+  }else{
+    btn.textContent="⬇ Installa app";
+    btn.disabled=false;
+  }
+}
+function messaggioAzioneApp(testo,errore=false){
+  const box=document.getElementById("msgAzioniApp");
+  box.textContent=testo;
+  box.style.color=errore?"var(--bad)":"var(--muted)";
+}
+function confrontaVersioni(a,b){
+  const pa=String(a||"").split(".").map(n=>Number(n)||0);
+  const pb=String(b||"").split(".").map(n=>Number(n)||0);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    const diff=(pa[i]||0)-(pb[i]||0);
+    if(diff!==0)return diff;
+  }
+  return 0;
+}
+async function applicaAggiornamento(info){
+  messaggioAzioneApp(`Aggiornamento alla versione ${info.version} in corso…`);
+  if("serviceWorker" in navigator){
+    const reg=await navigator.serviceWorker.getRegistration();
+    if(reg){
+      let ricaricato=false;
+      const ricarica=()=>{if(!ricaricato){ricaricato=true;location.reload();}};
+      navigator.serviceWorker.addEventListener("controllerchange",ricarica,{once:true});
+      await reg.update();
+      const worker=reg.waiting||reg.installing;
+      if(worker){
+        const attiva=()=>{if(worker.state==="installed")worker.postMessage("SKIP_WAITING");};
+        worker.addEventListener("statechange",attiva);
+        attiva();
+        setTimeout(ricarica,2500);
+        return;
+      }
+    }
+  }
+  location.reload();
+}
+async function controllaAggiornamenti(){
+  const btn=document.getElementById("btnControllaAggiornamenti");
+  const originale=btn.textContent;
+  btn.disabled=true;btn.textContent="Controllo…";
+  try{
+    if(location.protocol==="file:")throw new Error("Il controllo automatico è disponibile nella PWA pubblicata, non nel file portatile.");
+    if(navigator.onLine===false)throw new Error("Connessione assente: riprova quando sei online.");
+    const url=new URL("version.json",location.href);
+    url.searchParams.set("controllo",Date.now());
+    const risposta=await fetch(url,{cache:"no-store"});
+    if(!risposta.ok)throw new Error("il server ha risposto "+risposta.status);
+    const info=await risposta.json();
+    if(!info || typeof info.version!=="string")throw new Error("informazioni di versione non valide");
+    if(confrontaVersioni(info.version,APP_VERSION)<=0){
+      messaggioAzioneApp(`Versione ${APP_VERSION}: l’app è aggiornata (build ${APP_BUILD}).`);
+      return;
+    }
+    messaggioAzioneApp(`Disponibile versione ${info.version}${info.notes?": "+info.notes:""}`);
+    if(confirm(`È disponibile la versione ${info.version}.\n\n${info.notes||""}\n\nAggiornare ora?`)){
+      await applicaAggiornamento(info);
+    }
+  }catch(e){
+    messaggioAzioneApp("Controllo aggiornamenti non riuscito: "+e.message,true);
+  }finally{
+    btn.disabled=false;btn.textContent=originale;
+  }
+}
+async function installaApp(){
+  if(appInstallata()){
+    messaggioAzioneApp("L’app è già installata su questo dispositivo.");
+    return;
+  }
+  if(eventoInstallazione){
+    const evento=eventoInstallazione;
+    eventoInstallazione=null;
+    await evento.prompt();
+    const scelta=await evento.userChoice;
+    messaggioAzioneApp(scelta.outcome==="accepted"?"Installazione avviata.":"Installazione annullata.");
+    aggiornaPulsanteInstalla();
+    return;
+  }
+  const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  const desktop=/windows|macintosh|linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+  const istruzioni=ios
+    ? "Su iPhone/iPad: apri questa pagina in Safari, premi Condividi e poi Aggiungi alla schermata Home."
+    : desktop
+      ? "In Chrome o Edge apri il menu ⋮ e scegli Trasmetti, salva e condividi → Installa pagina come app. Se la voce non compare, attendi qualche secondo e ricarica la pagina."
+      : "In Chrome apri il menu ⋮ e scegli Installa app oppure Aggiungi a schermata Home. Se la voce non compare, attendi qualche secondo e ricarica la pagina.";
+  alert(istruzioni);
+  messaggioAzioneApp("Il browser richiede l’installazione dal proprio menu.");
+}
+async function scaricaVersionePortatile(){
+  const btn=document.getElementById("btnScaricaPortatile");
+  const testoOriginale=btn.textContent;
+  btn.disabled=true;btn.textContent="Preparazione…";
+  try{
+    let html;
+    try{
+      const risposta=await fetch(new URL("index.html",location.href),{cache:"no-store"});
+      if(!risposta.ok)throw new Error("HTTP "+risposta.status);
+      html=await risposta.text();
+    }catch(e){
+      html="<!DOCTYPE html>\n"+document.documentElement.outerHTML;
+    }
+    const blob=new Blob([html],{type:"text/html;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;a.download="Generatore_Turni_Portatile.html";
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),3000);
+    messaggioAzioneApp("File portatile scaricato. Puoi rinominarlo e aprirlo anche senza Internet.");
+  }catch(e){
+    messaggioAzioneApp("Download non riuscito: "+e.message,true);
+  }finally{
+    btn.disabled=false;btn.textContent=testoOriginale;
+  }
+}
+function initInstallazioneEDownload(){
+  document.getElementById("btnInstallaApp").onclick=installaApp;
+  document.getElementById("btnScaricaPortatile").onclick=scaricaVersionePortatile;
+  document.getElementById("btnControllaAggiornamenti").onclick=controllaAggiornamenti;
+  document.querySelectorAll(".numeroVersioneApp").forEach(el=>el.textContent=APP_VERSION);
+  window.addEventListener("beforeinstallprompt",e=>{
+    e.preventDefault();eventoInstallazione=e;
+    messaggioAzioneApp("L’app è pronta per l’installazione.");
+    aggiornaPulsanteInstalla();
+  });
+  window.addEventListener("appinstalled",()=>{
+    eventoInstallazione=null;
+    messaggioAzioneApp("App installata correttamente.");
+    aggiornaPulsanteInstalla();
+  });
+  aggiornaPulsanteInstalla();
+}
+
 
 const undoStack=[],redoStack=[];
 function registraAnnullamento(prima=state){undoStack.push(JSON.parse(JSON.stringify(prima)));if(undoStack.length>20)undoStack.shift();redoStack.length=0;aggiornaUndo();}
@@ -3557,6 +3732,7 @@ renderArchivio();
 initInfoEAiuto();
 initConfig();
 initContatti();
+initInstallazioneEDownload();
 renderRiepilogo();
 </script>
 <script>

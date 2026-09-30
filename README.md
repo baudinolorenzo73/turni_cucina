@@ -4,7 +4,7 @@ App web installabile (PWA) per generare i turni **cucina** e **servizio** del me
 Funziona **interamente offline**: nessun server, nessun account, nessun dato inviato in rete.
 I dati restano solo sul dispositivo di chi la usa. Il backup JSON è la copia da conservare: il salvataggio locale non sostituisce un backup.
 
-*by Lollo ®2026 — versione 2*
+*by Lollo ®2026 — versione 2.2.0*
 
 Le correzioni e i limiti sono descritti in [CHANGELOG.md](CHANGELOG.md).
 
@@ -18,6 +18,8 @@ Le correzioni e i limiti sono descritti in [CHANGELOG.md](CHANGELOG.md).
 - **Generazione annullabile** in un processo separato, con diagnostica dei turni privi di candidati.
 - **Archivio mensile**: ripristina i nuovi piani e i relativi vincoli; modifiche manuali salvate nello storico.
 - **Annulla/ripristina** le principali operazioni sul piano (cronologia temporanea).
+- **Controllo aggiornamenti** dalla barra superiore, con versione visibile e conferma prima del caricamento.
+- **Guida completa** interna, accessibile dal pulsante Aiuto.
 - **Giorni speciali** a squadra.
 - Regole di equilibrio (riposo, weekend equi, evita lo stesso giorno della settimana come preferenza, ecc.) e regole personalizzate.
 - Modifiche manuali dal calendario, con avviso se violano una regola obbligatoria.
@@ -27,6 +29,9 @@ Le correzioni e i limiti sono descritti in [CHANGELOG.md](CHANGELOG.md).
 ## Uso online
 
 Apri l'indirizzo della pagina nel browser. Per installarla come app:
+
+- Premi **Installa app** nell'intestazione. Quando il browser consente l'installazione, si apre direttamente la conferma.
+- Premi **Scarica HTML** per ottenere `Generatore_Turni_Portatile.html`, utilizzabile come singolo file e liberamente rinominabile.
 
 - **Android (Chrome)**: menu ⋮ → *Installa app* (oppure *Aggiungi a schermata Home*).
 - **iPhone/iPad (Safari)**: tasto Condividi → *Aggiungi a schermata Home*.
@@ -69,7 +74,7 @@ I percorsi nei file sono tutti relativi, quindi funziona senza modifiche anche i
 ## Pubblicare un aggiornamento
 
 1. Prima scarica un backup JSON con **Salva**. Sostituisci `index.html` e `sw.js` con quelli aggiornati, mantenendo lo stesso indirizzo e percorso dell’app. Cambiando indirizzo, il browser usa un altro salvataggio locale: importa il backup.
-2. Questo archivio ha già la cache aggiornata a `turni-v2`. Per gli aggiornamenti successivi incrementa `VERSIONE` in `sw.js` (`turni-v3`, `turni-v4`, …).
+2. Aggiorna insieme `APP_VERSION` in `index.html`, `version.json` e `VERSIONE` in `sw.js`. Questo archivio usa versione `2.2.0` e cache `turni-v4`.
 3. Pubblica:
    ```bash
    git add .
