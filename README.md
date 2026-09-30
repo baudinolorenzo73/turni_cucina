@@ -2,9 +2,11 @@
 
 App web installabile (PWA) per generare i turni **cucina** e **servizio** del mese per un gruppo o una comunità.
 Funziona **interamente offline**: nessun server, nessun account, nessun dato inviato in rete.
-I dati restano solo sul dispositivo di chi la usa.
+I dati restano solo sul dispositivo di chi la usa. Il backup JSON è la copia da conservare: il salvataggio locale non sostituisce un backup.
 
-*by Lollo ®2026*
+*by Lollo ®2026 — versione 2*
+
+Le correzioni e i limiti sono descritti in [CHANGELOG.md](CHANGELOG.md).
 
 ## Cosa fa
 
@@ -12,14 +14,17 @@ I dati restano solo sul dispositivo di chi la usa.
 - Generazione automatica del piano mensile, con possibilità di chiedere una variante.
 - **Turni fissi**: un giorno/ruolo assegnato a una persona precisa, sempre rispettato.
 - **Indisponibilità** per persona e giorno.
-- **Affiancamenti programmati**: scegli tu giorno, ruolo e persona; restano anche rigenerando il piano e contano nella soglia di affiancamento richiesta dal profilo.
+- **Affiancamenti programmati**: restano anche rigenerando. Ai fini della formazione contano solo prima del giorno del turno e nei mesi precedenti, mai in quelli futuri.
+- **Generazione annullabile** in un processo separato, con diagnostica dei turni privi di candidati.
+- **Archivio mensile**: ripristina i nuovi piani e i relativi vincoli; modifiche manuali salvate nello storico.
+- **Annulla/ripristina** le principali operazioni sul piano (cronologia temporanea).
 - **Giorni speciali** a squadra.
 - Regole di equilibrio (riposo, weekend equi, evita lo stesso giorno della settimana come preferenza, ecc.) e regole personalizzate.
 - Modifiche manuali dal calendario, con avviso se violano una regola obbligatoria.
 - Riepilogo per persona (totale, cucina, servizio, weekend, supporto).
 - Esportazione in **Word, Excel e PDF**, stampa, salvataggio e backup dei dati.
 
-## Uso online (già pubblicata)
+## Uso online
 
 Apri l'indirizzo della pagina nel browser. Per installarla come app:
 
@@ -63,8 +68,8 @@ I percorsi nei file sono tutti relativi, quindi funziona senza modifiche anche i
 
 ## Pubblicare un aggiornamento
 
-1. Modifica `index.html`.
-2. In `sw.js` cambia la riga `const VERSIONE = "turni-v1";` con un numero nuovo (`turni-v2`, `turni-v3`, …). Senza questo passaggio chi ha già installato l'app può continuare a vedere la versione vecchia.
+1. Prima scarica un backup JSON con **Salva**. Sostituisci `index.html` e `sw.js` con quelli aggiornati, mantenendo lo stesso indirizzo e percorso dell’app. Cambiando indirizzo, il browser usa un altro salvataggio locale: importa il backup.
+2. Questo archivio ha già la cache aggiornata a `turni-v2`. Per gli aggiornamenti successivi incrementa `VERSIONE` in `sw.js` (`turni-v3`, `turni-v4`, …).
 3. Pubblica:
    ```bash
    git add .
@@ -101,3 +106,13 @@ Tutto avviene nel browser. I nomi e i piani restano nella memoria locale del dis
 ---
 
 © by Lollo ®2026
+
+## Test del progetto
+
+Con Node.js installato, dalla cartella dell’app:
+
+```bash
+node tests/regression.cjs
+```
+
+Questi test verificano generazione, vincoli, formazione, storico, salvataggi e isolamento della cache. La verifica dell’interfaccia e dell’installazione va eseguita anche nel browser del dispositivo.

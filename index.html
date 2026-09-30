@@ -99,6 +99,7 @@
   .row > div{flex:1;min-width:110px}
   .btn{background:var(--accent);color:var(--accent-text);border:none;border-radius:8px;
     padding:9px 14px;font-size:13px;cursor:pointer;display:inline-block;text-decoration:none;text-align:center}
+  [hidden]{display:none !important}
   .btn.secondary{background:var(--surface2);color:var(--ink);border:1px solid var(--line)}
   .btn.danger{background:var(--surface2);color:var(--bad);border:1px solid var(--msg-bad-border)}
   .btn:disabled{opacity:.5;cursor:not-allowed}
@@ -249,12 +250,13 @@
   </div>
 </header>
 <main>
+  <div id="msgSalvataggio" class="msg bad" role="status" style="display:none"></div>
   <nav class="tabs" id="tabs"></nav>
 
   <section class="tab" data-tab="mese">
     <h2>1 · Progetto</h2>
     <div class="row">
-      <div style="flex:2"><label>Nome progetto</label><input id="inNomeProgetto" placeholder="es. Ristorante Da Mario"></div>
+      <div style="flex:2"><label>Nome progetto</label><input id="inNomeProgetto" maxlength="160" placeholder="es. Ristorante Da Mario"></div>
     </div>
     <div class="row">
       <div>
@@ -268,11 +270,15 @@
     </div>
     <div class="msg info" id="infoMese"></div>
     <div class="row" style="margin-top:10px">
-      <div><label>Codice variante <button type="button" class="info-btn" data-info="codiceVariante">i</button></label><input id="inCodiceVariante" placeholder="es. prova1 (vuoto = casuale)"></div>
+      <div><label>Codice variante <button type="button" class="info-btn" data-info="codiceVariante">i</button></label><input id="inCodiceVariante" maxlength="120" placeholder="es. prova1 (vuoto = casuale)"></div>
     </div>
 
+    <h2 style="margin-top:18px">Archivio mensile</h2>
+    <div class="row"><select id="archivioMese" aria-label="Piani archiviati"></select><button class="btn mini secondary" id="btnRipristinaMese">Ripristina piano</button></div>
+    <p class="hint">Ripristina anche persone e vincoli del mese scelto. Le modifiche manuali vengono archiviate automaticamente.</p>
     <h2 style="margin-top:18px">Salvataggio &amp; backup <button type="button" class="info-btn" data-info="backupProgetto">i</button></h2>
     <div id="msgBackup"></div>
+    <div id="promemoriaBackup" class="msg info" hidden></div>
     <div class="exportbar">
       <button class="btn mini secondary" id="btnBackupJson">Salva</button>
       <label class="btn mini secondary" style="display:inline-block;text-align:center">Carica
@@ -422,6 +428,9 @@
     <div class="exportbar">
       <button class="btn grande" id="btnGenera">Genera</button>
       <button class="btn mini secondary" id="btnVariante">Proponi una variante diversa</button>
+      <button class="btn mini secondary" id="btnAnnullaGenerazione" hidden>Annulla calcolo</button>
+      <button class="btn mini secondary" id="btnUndo" disabled>Annulla modifica</button>
+      <button class="btn mini secondary" id="btnRedo" disabled>Ripristina modifica</button>
     </div>
     <div style="margin-top:14px;overflow-x:auto">
       <table class="cal" id="calGrid"></table>
@@ -531,25 +540,36 @@ let state = {
   storico: {}             // {"anno-mese": {griglia, persone}} — ultimo piano generato per ogni mese, usato per la continuità (riposo minimo, distanza weekend) con il mese precedente
 };
 
+const STATO_INIZIALE=JSON.parse(JSON.stringify(state));
 const LS_KEY = "turni_offline_state_v1";
-function salvaLocale(){
-  try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){}
+let ultimoErroreSalvataggio="";
+function segnalaSalvataggio(testo){
+  if(typeof document!=="undefined") { const box=document.getElementById("msgSalvataggio");if(box){box.textContent=testo;box.style.display=testo?"block":"none";}}
 }
-function caricaLocale(){
+function normalizzaBackup(d){
+  const nuovo=Object.assign(JSON.parse(JSON.stringify(STATO_INIZIALE)),d);
+  nuovo.regole=Object.assign({},STATO_INIZIALE.regole,d.regole);
+  if(!Array.isArray(d.affiancamenti)) nuovo.affiancamenti=undefined;
+  return nuovo;
+}
+function salvaLocale(){
   try{
-    const raw = localStorage.getItem(LS_KEY);
-    if(raw){
-      const d = JSON.parse(raw);
-      // Salvataggio di una versione precedente senza elenco affiancamenti: lo ricostruirà migraAffiancamenti()
-      if(!Array.isArray(d.affiancamenti)) state.affiancamenti = undefined;
-      Object.assign(state, d);
-    }
-  }catch(e){}
+    if(pianoAggiornato()) salvaNelloStorico();
+    localStorage.setItem(LS_KEY,JSON.stringify(state));
+    ultimoErroreSalvataggio="";segnalaSalvataggio("");return true;
+  }catch(e){ultimoErroreSalvataggio="Salvataggio non riuscito: memoria piena o non disponibile. Scarica un backup con Salva.";segnalaSalvataggio(ultimoErroreSalvataggio);return false;}
 }
 
-// Migrazione: i nomi persona sono ora sempre maiuscoli. Rimappa coerentemente ogni
-// riferimento al nome (fissi, indisponibilità, regole personalizzate, profili) usando
-// la stessa mappa vecchio-nome -> nuovo-nome, idempotente se già tutto maiuscolo.
+function caricaLocale(){
+  try{
+    const raw=localStorage.getItem(LS_KEY);
+    if(!raw) return false;
+    const d=JSON.parse(raw),errore=validaStrutturaBackup(d);
+    if(errore) throw new Error(errore);
+    state=normalizzaBackup(d);return true;
+  }catch(e){segnalaSalvataggio("Impossibile caricare il salvataggio: "+e.message+". Il file originale resta nel browser; puoi importare un backup valido.");return false;}
+}
+
 function assicuraNomiMaiuscoli(){
   if(!Array.isArray(state.persone) || state.persone.length===0) return;
   const mappa = {};
@@ -572,6 +592,12 @@ function assicuraNomiMaiuscoli(){
   (state.giorniSpeciali||[]).forEach(gs=>{
     gs.cucina = gs.cucina.map(rinomina);
     gs.servizio = gs.servizio.map(rinomina);
+  });
+  Object.values(state.storico||{}).forEach(voce=>{
+    voce.persone=(voce.persone||[]).map(rinomina);
+    Object.values(voce.griglia||{}).forEach(day=>["CUCINA","SERVIZIO","affCucina","affServizio"].forEach(k=>{if(day[k])day[k]=rinomina(day[k]);}));
+    (voce.giorniSpeciali||[]).forEach(gs=>{gs.cucina=gs.cucina.map(rinomina);gs.servizio=gs.servizio.map(rinomina);});
+    if(voce.input) delete voce.input; // vecchie istantanee con nomi diversi: non ripristinabili automaticamente
   });
   if(state.profili){
     const nuoviProfili = {};
@@ -621,7 +647,8 @@ function datiRilevantiPiano(){
   return JSON.stringify({
     mese: state.mese, anno: state.anno, persone: state.persone, profili: state.profili,
     fissi: state.fissi, affiancamenti: state.affiancamenti, giorniSpeciali: state.giorniSpeciali, indisponibilita: state.indisponibilita, regole: state.regole,
-    regoleCustom: state.regoleCustom, codiceVariante: state.codiceVariante || ""
+    regoleCustom: state.regoleCustom, codiceVariante: state.codiceVariante || "",
+    storicoRilevante:Object.fromEntries(Object.entries(state.storico||{}).filter(([k])=>{const [a,m]=k.split("-").map(Number);return a*12+m<state.anno*12+state.mese;}).map(([k,v])=>[k,{griglia:v.griglia,persone:v.persone,giorniSpeciali:v.giorniSpeciali||[]}]))
   });
 }
 function fingerprintDi(str){
@@ -671,21 +698,17 @@ function mesePrecedente(anno, mese){ return mese===1 ? {anno:anno-1, mese:12} : 
 
 // Salva il piano appena generato nello storico mensile, così il mese successivo potrà
 // usarlo per la continuità (riposo minimo, distanza weekend, consecutività a cavallo dei
-// due mesi). Tiene solo gli ultimi 6 mesi per non far crescere il salvataggio all'infinito.
+// due mesi). Conserva lo storico per non perdere gli affiancamenti precedenti.
 function salvaNelloStorico(){
   if(!state.griglia) return;
   state.storico[chiaveMese(state.anno, state.mese)] = {
     griglia: JSON.parse(JSON.stringify(state.griglia)),
-    persone: state.persone.slice()
+    persone: state.persone.slice(),
+    giorniSpeciali: JSON.parse(JSON.stringify(state.giorniSpeciali||[])),
+    input: (()=>{const input=JSON.parse(datiRilevantiPiano());delete input.storicoRilevante;return input;})(),
+    pianoInfo: JSON.parse(JSON.stringify(state.pianoInfo||{}))
   };
-  const chiavi = Object.keys(state.storico);
-  if(chiavi.length > 6){
-    chiavi.sort((a,b)=>{
-      const [aa,am] = a.split("-").map(Number), [ba,bm] = b.split("-").map(Number);
-      return (aa*12+am) - (ba*12+bm);
-    });
-    delete state.storico[chiavi[0]];
-  }
+
 }
 
 // Estrae dallo storico, per ogni persona presente sia nel mese precedente che in quello
@@ -703,7 +726,9 @@ function continuitaMesePrecedente(){
     for(let g=1; g<=Jprec; g++){
       const day = voce.griglia[g];
       if(!day) continue;
-      if(day.CUCINA===p || day.SERVIZIO===p){
+      const gs = (voce.giorniSpeciali||[]).find(x=>x.giorno===g);
+      if(day.CUCINA===p || day.SERVIZIO===p || day.affCucina===p || day.affServizio===p ||
+         (gs && [...gs.cucina,...gs.servizio].includes(p))){
         ultimoGiorno = g;
         if(isWeekend(prec.anno, prec.mese, g)){
           const wg = settimanaGlobale(prec.anno, prec.mese, g);
@@ -714,7 +739,13 @@ function continuitaMesePrecedente(){
     if(ultimoGiorno!==null || ultimoWeekendGlobale!==null){
       risultato[p] = {
         giornoVirtuale: ultimoGiorno!==null ? (ultimoGiorno - Jprec) : null, // ≤0
-        ultimoWeekendGlobale
+        ultimoWeekendGlobale,
+        turniSettimana: Object.entries(voce.griglia).filter(([gg,day])=>{
+          const g=Number(gg),gs=(voce.giorniSpeciali||[]).find(x=>x.giorno===g);
+          return settimanaGlobale(prec.anno,prec.mese,g)===settimanaGlobale(state.anno,state.mese,1) &&
+            (day.CUCINA===p || day.SERVIZIO===p || day.affCucina===p || day.affServizio===p ||
+             (gs && [...gs.cucina,...gs.servizio].includes(p)));
+        }).length
       };
     }
   });
@@ -749,6 +780,8 @@ function initTabs(){
   selectTab("mese");
 }
 function selectTab(id){
+  if(id==="genera")renderCalendario();
+  if(id==="export")renderRiepilogo();
   document.querySelectorAll("section.tab").forEach(s=> s.classList.toggle("active", s.dataset.tab===id));
   document.querySelectorAll("[data-tab-btn]").forEach(b=> b.classList.toggle("active", b.dataset.tabBtn===id));
 }
@@ -764,9 +797,9 @@ function initMese(){
   document.getElementById("inAnno").value = state.anno;
   document.getElementById("inNomeProgetto").value = state.nomeProgetto || "";
   document.getElementById("inCodiceVariante").value = state.codiceVariante || "";
-  sel.onchange = ()=>{ state.mese = Number(sel.value); salvaLocale(); renderInfoMese(); };
+  sel.onchange = ()=> cambiaPeriodo(state.anno,Number(sel.value));
   document.getElementById("inAnno").oninput = (e)=>{
-    state.anno = Number(e.target.value)||state.anno; salvaLocale(); renderInfoMese();
+    const anno=Number(e.target.value);if(Number.isInteger(anno)&&anno>=2000&&anno<=2100)cambiaPeriodo(anno,state.mese);
   };
   document.getElementById("inNomeProgetto").oninput = (e)=>{
     state.nomeProgetto = e.target.value; salvaLocale();
@@ -892,6 +925,7 @@ function renderPersone(){
     const btnRimuovi = document.createElement("button");
     btnRimuovi.textContent = "✕";
     btnRimuovi.onclick = ()=>{
+      registraAnnullamento();
       state.persone = state.persone.filter(p=>p!==nome);
       delete state.profili[nome];
       state.fissi = state.fissi.filter(f=>f.nome!==nome);
@@ -931,7 +965,7 @@ function renderPersone(){
     const lblMin = document.createElement("label");
     const inMin = document.createElement("input"); inMin.type="number"; inMin.min="0"; inMin.max="31"; inMin.value=prof.minTurni;
     inMin.style.cssText = "width:48px;display:inline-block";
-    inMin.onchange = ()=> aggiornaProfilo({minTurni: Number(inMin.value)||0});
+    inMin.onchange = ()=> aggiornaProfilo({minTurni: Math.min(31,Math.max(0,Math.trunc(Number(inMin.value)||0)))});
     lblMin.append("Min turni "); lblMin.appendChild(inMin);
     const lblEscl = document.createElement("label");
     const chkEscl = document.createElement("input"); chkEscl.type="checkbox"; chkEscl.checked=prof.escluso; chkEscl.style.width="auto";
@@ -940,12 +974,12 @@ function renderPersone(){
     const lblAffC = document.createElement("label");
     const inAffC = document.createElement("input"); inAffC.type="number"; inAffC.min="0"; inAffC.max="31"; inAffC.value=prof.affCucinaRichiesti;
     inAffC.style.cssText = "width:48px;display:inline-block";
-    inAffC.onchange = ()=> aggiornaProfilo({affCucinaRichiesti: Number(inAffC.value)||0});
+    inAffC.onchange = ()=> aggiornaProfilo({affCucinaRichiesti: Math.min(31,Math.max(0,Math.trunc(Number(inAffC.value)||0)))});
     lblAffC.append("Affiancamento richiesto Cucina "); lblAffC.appendChild(inAffC);
     const lblAffS = document.createElement("label");
     const inAffS = document.createElement("input"); inAffS.type="number"; inAffS.min="0"; inAffS.max="31"; inAffS.value=prof.affServizioRichiesti;
     inAffS.style.cssText = "width:48px;display:inline-block";
-    inAffS.onchange = ()=> aggiornaProfilo({affServizioRichiesti: Number(inAffS.value)||0});
+    inAffS.onchange = ()=> aggiornaProfilo({affServizioRichiesti: Math.min(31,Math.max(0,Math.trunc(Number(inAffS.value)||0)))});
     lblAffS.append("Servizio "); lblAffS.appendChild(inAffS);
 
     [lblCucina, lblServizio, lblMin, lblEscl, lblAffC, lblAffS].forEach(el=> riga2.appendChild(el));
@@ -955,8 +989,8 @@ function renderPersone(){
       const riga3 = document.createElement("div");
       riga3.style.cssText = "font-size:11px;color:var(--muted);margin-top:3px";
       const parti = [];
-      if(prof.affCucinaRichiesti>0) parti.push(`Cucina: ${affiancamentiCompletati(nome,"CUCINA")}/${prof.affCucinaRichiesti} completati`);
-      if(prof.affServizioRichiesti>0) parti.push(`Servizio: ${affiancamentiCompletati(nome,"SERVIZIO")}/${prof.affServizioRichiesti} completati`);
+      if(prof.affCucinaRichiesti>0) parti.push(`Cucina: ${affiancamentiCompletati(nome,"CUCINA")}/${prof.affCucinaRichiesti} programmati/archiviati`);
+      if(prof.affServizioRichiesti>0) parti.push(`Servizio: ${affiancamentiCompletati(nome,"SERVIZIO")}/${prof.affServizioRichiesti} programmati/archiviati`);
       riga3.textContent = "Affiancamento — " + parti.join(" · ");
       li.appendChild(riga3);
     }
@@ -974,25 +1008,28 @@ function profiloDi(nome){
     affServizioRichiesti: Math.max(0, Number(p.affServizioRichiesti) || 0)
   };
 }
-// Conta quanti giorni di affiancamento (supporto) una persona ha già completato in un
+// Conta quanti giorni di affiancamento (supporto) una persona ha previsto prima del turno in un
 // ruolo, contando sia i mesi archiviati nello storico sia il piano del mese corrente.
 // Serve per sapere se ha già raggiunto la soglia richiesta dal suo profilo prima di
 // poter essere messa in turno "normale" (da sola) in quel ruolo.
-function affiancamentiCompletati(persona, ruolo){
+function affiancamentiCompletati(persona, ruolo, primaDelGiorno=Infinity){
   const key = ruolo==="CUCINA" ? "affCucina" : "affServizio";
   let n = 0;
-  const chiaveCorrente = chiaveMese(state.anno, state.mese);
+  const corrente = state.anno*12+state.mese;
   Object.entries(state.storico||{}).forEach(([chiave, voce])=>{
-    if(chiave===chiaveCorrente) return; // il mese corrente si conta dall'elenco programmato
-    if(!voce || !voce.griglia) return;
+    const [a,m] = chiave.split("-").map(Number);
+    if(a*12+m >= corrente || !voce || !voce.griglia) return;
     Object.values(voce.griglia).forEach(day=>{ if(day && day[key]===persona) n++; });
   });
   const J = giorniNelMese(state.anno, state.mese);
+  const giorni = new Set();
   (state.affiancamenti||[]).forEach(a=>{
-    if(a.nome===persona && a.ruolo===ruolo && a.giorno>=1 && a.giorno<=J) n++;
+    if(a.nome===persona && a.ruolo===ruolo && a.giorno>=1 && a.giorno<=J && a.giorno<primaDelGiorno &&
+       !(state.giorniSpeciali||[]).some(gs=>gs.giorno===a.giorno)) giorni.add(a.giorno);
   });
-  return n;
+  return n+giorni.size;
 }
+
 function escHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
@@ -1012,7 +1049,7 @@ function initFissi(){
     const msg = document.getElementById("msgFissi");
     msg.innerHTML = "";
     const J = giorniNelMese(state.anno, state.mese);
-    if(!nome || !giorno || giorno<1 || giorno>J) return;
+    if(!nome || !Number.isInteger(giorno) || giorno<1 || giorno>J) return;
     const duplicato = state.fissi.find(f=> f.giorno===giorno && f.ruolo===ruolo && f.nome===nome);
     if(duplicato){
       msg.innerHTML = `<div class="msg bad">Questo turno fisso è già presente in elenco.</div>`;
@@ -1078,7 +1115,7 @@ function initAffiancamenti(){
     msg.innerHTML = "";
     const J = giorniNelMese(state.anno, state.mese);
     if(!nome) return;
-    if(!giorno || giorno<1 || giorno>J){
+    if(!Number.isInteger(giorno) || giorno<1 || giorno>J){
       msg.innerHTML = `<div class="msg bad">Indica un giorno valido del mese (1-${J}).</div>`; return;
     }
     if((state.giorniSpeciali||[]).some(gs=> gs.giorno===giorno)){
@@ -1180,7 +1217,7 @@ function initGiorniSpeciali(){
     const msg = document.getElementById("msgGiorniSpeciali");
     msg.innerHTML = "";
     const J = giorniNelMese(state.anno, state.mese);
-    if(!giorno || giorno<1 || giorno>J){
+    if(!Number.isInteger(giorno) || giorno<1 || giorno>J){
       msg.innerHTML = `<div class="msg bad">Indica un giorno valido del mese.</div>`;
       return;
     }
@@ -1290,12 +1327,12 @@ function addIndisponibilita(){
   let params = {};
   if(tipo==="SPECIFICA"){
     params = {giorno:Number(document.getElementById("iGiorno").value)};
-    if(!params.giorno) return;
+    if(!Number.isInteger(params.giorno)||params.giorno<1||params.giorno>31){msg.textContent="Indica un giorno intero tra 1 e 31.";return;}
   } else if(tipo==="RICORRENTE_GIORNO"){
     params = {giornoSett:Number(document.getElementById("iGiornoSett").value)};
   } else if(tipo==="INTERVALLO"){
     params = {da:Number(document.getElementById("iDa").value), a:Number(document.getElementById("iA").value)};
-    if(!params.da || !params.a || params.da>params.a) return;
+    if(!Number.isInteger(params.da)||!Number.isInteger(params.a)||params.da<1||params.a>31||params.da>params.a){msg.textContent="Indica un intervallo valido tra 1 e 31.";return;}
   } else if(tipo==="MESE_RICORRENTE"){
     params = {mese:Number(document.getElementById("iMese").value)};
   } else if(tipo==="WEEKEND_RICORRENTE"){
@@ -1384,16 +1421,16 @@ function initRegole(){
     el.onchange = ()=>{ state.regole[key]=el.checked; salvaLocale(); };
   });
   document.getElementById("rRiposoVal").onchange = (e)=>{
-    state.regole.riposoVal = Number(e.target.value)||1; salvaLocale();
+    state.regole.riposoVal = Math.min(31,Math.max(1,Math.trunc(Number(e.target.value)||1))); salvaLocale();
   };
   document.getElementById("rMaxSettimanaVal").oninput = (e)=>{
-    state.regole.maxSettimanaVal = Number(e.target.value)||1; salvaLocale();
+    state.regole.maxSettimanaVal = Math.min(31,Math.max(1,Math.trunc(Number(e.target.value)||1))); salvaLocale();
   };
   document.getElementById("rMaxWeekendVal").oninput = (e)=>{
-    state.regole.maxWeekendVal = Number(e.target.value)||1; salvaLocale();
+    state.regole.maxWeekendVal = Math.min(31,Math.max(1,Math.trunc(Number(e.target.value)||1))); salvaLocale();
   };
   document.getElementById("rDistanzaWeekendVal").onchange = (e)=>{
-    state.regole.distanzaWeekendVal = Number(e.target.value)||1; salvaLocale();
+    state.regole.distanzaWeekendVal = Math.min(31,Math.max(1,Math.trunc(Number(e.target.value)||1))); salvaLocale();
   };
   sincronizzaControlliRegole();
 
@@ -1441,9 +1478,9 @@ function addCustomRule(){
   let params = {};
   if(tipo==="NON_ASSEGNARE_GIORNO" || tipo==="PREFERENZA_DATA"){
     params = {persona:document.getElementById("cPersona").value, giorno:Number(document.getElementById("cGiorno").value)};
-    if(!params.giorno) return;
+    if(!Number.isInteger(params.giorno)||params.giorno<1||params.giorno>31){msg.textContent="Indica un giorno intero tra 1 e 31.";return;}
   } else if(tipo==="MAX_TURNI"){
-    params = {persona:document.getElementById("cPersona").value, max:Number(document.getElementById("cMax").value)||1};
+    params = {persona:document.getElementById("cPersona").value, max:Math.min(62,Math.max(1,Math.trunc(Number(document.getElementById("cMax").value)||1)))};
   } else if(tipo==="NON_CON" || tipo==="COPPIA_PREFERITA"){
     params = {persona:document.getElementById("cPersona").value, persona2:document.getElementById("cPersona2").value};
     if(params.persona===params.persona2) return;
@@ -1524,6 +1561,8 @@ function elencoProfiliPersonalizzati(){
     if(!p.servizio) note.push("no SERVIZIO");
     if(p.minTurni>0) note.push(`minimo ${p.minTurni} turni`);
     if(p.escluso) note.push("esclusa dalla generazione");
+    if(p.affCucinaRichiesti)note.push(`affiancamenti cucina richiesti: ${p.affCucinaRichiesti}`);
+    if(p.affServizioRichiesti)note.push(`affiancamenti servizio richiesti: ${p.affServizioRichiesti}`);
     if(note.length) out.push(`${nome}: ${note.join(", ")}`);
   });
   return out;
@@ -1582,93 +1621,58 @@ function seedDaStringa(str){
 // dalla griglia risultante, invece di fidarsi solo dei contatori interni usati durante la
 // costruzione greedy. Serve a intercettare eventuali bug dell'algoritmo (è già successo).
 function validaPianoIndipendente(griglia, ctx){
-  const {anno, mese, persone, regole, regoleCustom, personaIndisponibile, fissi, continuita} = ctx;
-  const J = giorniNelMese(anno, mese);
-  const violazioni = [];
-  const profili = {}; persone.forEach(p=> profili[p] = profiloDi(p));
-  const de={}, he={}, lt={}, ut={}, uw={};
-  persone.forEach(p=>{ de[p]=-100; he[p]=0; lt[p]={}; ut[p]={}; });
-  // Continuità col mese precedente (se disponibile): seme iniziale di de/uw, così i
-  // controlli sui primi giorni del mese sanno cosa è successo negli ultimi giorni di quello
-  // prima, esattamente come durante la generazione vera e propria.
-  if(continuita){
-    Object.keys(continuita).forEach(p=>{
-      if(!(p in de)) return;
-      const c = continuita[p];
-      if(c.giornoVirtuale!==null) de[p] = Math.max(de[p], c.giornoVirtuale);
-      if(c.ultimoWeekendGlobale!==null) uw[p] = c.ultimoWeekendGlobale;
-    });
-  }
-  // Un fisso su un giorno "spiega" eventuali violazioni che lo coinvolgono: il turno fisso
-  // è per progetto un vincolo assoluto che può legittimamente scavalcare le altre regole
-  // (l'utente ne è già avvisato separatamente in generaGriglia). Qui distinguiamo queste
-  // violazioni "attese" da eventuali anomalie realmente inspiegate.
-  const fissiSet = new Set((fissi||[]).map(f=> f.nome+"|"+f.giorno));
-  function push(testo, ...personeGiorniCoinvolti){
-    // personeGiorniCoinvolti: coppie [persona, giorno] da controllare rispetto ai fissi
-    const fisso = personeGiorniCoinvolti.some(([p,g])=> fissiSet.has(p+"|"+g));
-    violazioni.push({testo, fisso});
-  }
-  for(let g=1; g<=J; g++){
-    const day = griglia[g] || {};
-    if(regole.noDoppio && day.CUCINA && day.SERVIZIO && day.CUCINA===day.SERVIZIO)
-      push(`Doppio turno: ${day.CUCINA} sia CUCINA che SERVIZIO il giorno ${g}`, [day.CUCINA,g]);
-    [day.affCucina, day.affServizio].forEach(a=>{
-      if(a && (a===day.CUCINA || a===day.SERVIZIO))
-        push(`${a} il giorno ${g} è sia titolare che in affiancamento`, [a,g]);
-    });
-    ["CUCINA","SERVIZIO"].forEach(ruolo=>{
-      const p = day[ruolo];
-      if(!p) return;
-      if(profili[p].escluso) push(`Persona esclusa ma presente nel piano: ${p}, giorno ${g}`, [p,g]);
-      if(ruolo==="CUCINA" && !profili[p].cucina) push(`Ruolo non consentito dal profilo: ${p} assegnata a CUCINA il giorno ${g}`, [p,g]);
-      if(ruolo==="SERVIZIO" && !profili[p].servizio) push(`Ruolo non consentito dal profilo: ${p} assegnata a SERVIZIO il giorno ${g}`, [p,g]);
-      if(ruolo==="CUCINA" && profili[p].affCucinaRichiesti > affiancamentiCompletati(p,"CUCINA"))
-        push(`Affiancamento cucina non completato: ${p} a CUCINA il giorno ${g} (completati ${affiancamentiCompletati(p,"CUCINA")}/${profili[p].affCucinaRichiesti})`, [p,g]);
-      if(ruolo==="SERVIZIO" && profili[p].affServizioRichiesti > affiancamentiCompletati(p,"SERVIZIO"))
-        push(`Affiancamento servizio non completato: ${p} a SERVIZIO il giorno ${g} (completati ${affiancamentiCompletati(p,"SERVIZIO")}/${profili[p].affServizioRichiesti})`, [p,g]);
-      if(personaIndisponibile(p, g)) push(`Indisponibilità violata: ${p} il giorno ${g}`, [p,g]);
-      if(regole.riposoMinimo && de[p]>-100 && de[p] >= g - regole.riposoVal)
-        push(`Riposo minimo violato: ${p} il giorno ${g} (ultimo turno il ${de[p]})`, [p,de[p]], [p,g]);
-      if(regole.noStessoWeekend && isWeekend(anno,mese,g) && de[p]===g-1 && isWeekend(anno,mese,g-1))
-        push(`Sabato+domenica insieme: ${p} nel weekend del giorno ${g}`, [p,g-1], [p,g]);
-      if(regole.maxSettimana){
-        const w = settimanaDi(anno,mese,g);
-        if((lt[p][w]||0) >= regole.maxSettimanaVal) push(`Massimo turni/settimana superato: ${p}, settimana del giorno ${g}`, [p,g]);
-      }
-      if(regole.maxWeekend && isWeekend(anno,mese,g) && (he[p]||0) >= regole.maxWeekendVal)
-        push(`Massimo weekend/mese superato: ${p}`, [p,g]);
-      if(regole.distanzaWeekend && isWeekend(anno,mese,g)){
-        const wg = settimanaGlobale(anno,mese,g);
-        const ultimo = uw[p];
-        if(ultimo!==undefined && wg!==ultimo && (wg-ultimo) <= regole.distanzaWeekendVal)
-          push(`Distanza minima fra weekend violata: ${p}, giorno ${g}`, [p,g]);
+  const {anno,mese,persone,regole,regoleCustom,personaIndisponibile,fissi=[],continuita={}}=ctx;
+  const J=giorniNelMese(anno,mese), violazioni=[], ultimo=Object.create(null),settimane=Object.create(null),weekend=Object.create(null),weekendSet=Object.create(null),weekendCorrenti=Object.create(null),totals=Object.create(null);
+  const fixed=new Set(fissi.map(f=>f.nome+"|"+f.giorno));
+  const push=(testo,...pairs)=>violazioni.push({testo,fisso:pairs.some(([p,g])=>fixed.has(p+"|"+g))});
+  persone.forEach(p=>{ultimo[p]=continuita[p]?.giornoVirtuale??-100;settimane[p]={};weekend[p]=0;weekendSet[p]=new Set();weekendCorrenti[p]=new Set();totals[p]=0;
+    if(continuita[p]?.ultimoWeekendGlobale!=null) weekendSet[p].add(continuita[p].ultimoWeekendGlobale);
+    settimane[p][settimanaGlobale(anno,mese,1)]=continuita[p]?.turniSettimana||0;
+  });
+  for(let g=1;g<=J;g++){
+    const day=griglia?.[g]||{}, gs=(state.giorniSpeciali||[]).find(x=>x.giorno===g);
+    const c=gs?gs.cucina:(day.CUCINA?[day.CUCINA]:[]), sv=gs?gs.servizio:(day.SERVIZIO?[day.SERVIZIO]:[]);
+    if(!gs){
+      for(const role of ["CUCINA","SERVIZIO"]) if(!day[role]) push(`Turno scoperto: ${role}, giorno ${g}`);
+      for(const f of fissi.filter(x=>x.giorno===g)) if(day[f.ruolo]!==f.nome) push(`Turno fisso non rispettato: ${f.nome}, ${f.ruolo}, giorno ${g}`);
+    }
+    if(regole.noDoppio) c.filter(p=>sv.includes(p)).forEach(p=>push(`Doppio turno: ${p} sia CUCINA che SERVIZIO il giorno ${g}`,[p,g]));
+    const aff=[day.affCucina,day.affServizio].filter(Boolean);
+    if(day.affCucina && day.affCucina===day.affServizio) push(`Doppio affiancamento: ${day.affCucina}, giorno ${g}`);
+    aff.filter(p=>c.includes(p)||sv.includes(p)).forEach(p=>push(`${p} il giorno ${g} è sia titolare che in affiancamento`));
+    for(const [role,names] of [["CUCINA",c],["SERVIZIO",sv]]) for(const p of names){
+      if(!persone.includes(p)){push(`Persona sconosciuta: ${p}, giorno ${g}`);continue;}
+      const prof=profiloDi(p);
+      if(!prof[role==="CUCINA"?"cucina":"servizio"]) push(`Ruolo non consentito: ${p}, ${role}, giorno ${g}`,[p,g]);
+      const richiesti=role==="CUCINA"?prof.affCucinaRichiesti:prof.affServizioRichiesti;
+      if(!gs && richiesti>affiancamentiCompletati(p,role,g)) push(`Affiancamento ${role.toLowerCase()} non completato prima del giorno ${g}: ${p}`,[p,g]);
+      if(!gs) totals[p]++;
+    }
+    const presenti=[...new Set([...c,...sv,...aff])];
+    for(const p of presenti){
+      if(!persone.includes(p)){push(`Persona sconosciuta: ${p}, giorno ${g}`);continue;}
+      if(profiloDi(p).escluso) push(`Persona esclusa presente: ${p}, giorno ${g}`,[p,g]);
+      if(personaIndisponibile(p,g)) push(`Indisponibilità violata: ${p}, giorno ${g}`,[p,g]);
+      if(regole.riposoMinimo && ultimo[p]>-100 && g-ultimo[p]<=regole.riposoVal) push(`Riposo minimo violato: ${p}, giorno ${g} (ultimo turno ${ultimo[p]})`,[p,ultimo[p]],[p,g]);
+      if(regole.noStessoWeekend && isWeekend(anno,mese,g) && ultimo[p]===g-1 && isWeekend(anno,mese,g-1)) push(`Sabato+domenica insieme: ${p}, giorno ${g}`,[p,g-1],[p,g]);
+      const w=settimanaGlobale(anno,mese,g);
+      if(regole.maxSettimana && (settimane[p][w]||0)>=regole.maxSettimanaVal) push(`Massimo presenze/settimana superato: ${p}, giorno ${g}`,[p,g]);
+      if(isWeekend(anno,mese,g)){
+        if(regole.maxWeekend && !weekendCorrenti[p].has(w) && weekend[p]>=regole.maxWeekendVal) push(`Massimo weekend/mese superato: ${p}, giorno ${g}`,[p,g]);
+        if(regole.distanzaWeekend && [...weekendSet[p]].some(v=>v!==w && Math.abs(w-v)<=regole.distanzaWeekendVal)) push(`Distanza minima fra weekend violata: ${p}, giorno ${g}`,[p,g]);
+        if(!weekendCorrenti[p].has(w)) weekend[p]++;
+        weekendCorrenti[p].add(w);weekendSet[p].add(w);
       }
       for(const r of regoleCustom){
-        if(r.tipo==="NON_ASSEGNARE_GIORNO" && r.params.persona===p && r.params.giorno===g)
-          push(`Regola "non assegnare giorno" violata: ${p}, giorno ${g}`, [p,g]);
-        if(r.tipo==="NON_CON"){
-          const altroRuolo = ruolo==="CUCINA" ? "SERVIZIO" : "CUCINA";
-          const altro = day[altroRuolo];
-          if(altro && ((r.params.persona===p && r.params.persona2===altro) ||
-                        (r.params.persona2===p && r.params.persona===altro)))
-            push(`Coppia da evitare violata: ${p} e ${altro}, giorno ${g}`, [p,g], [altro,g]);
-        }
-        if(r.tipo==="GIORNO_LIBERO" && r.params.persona===p && r.params.giornoSett===dow(anno,mese,g))
-          push(`Giorno libero ricorrente violato: ${p}, giorno ${g}`, [p,g]);
+        if(r.params.persona===p && ((r.tipo==="NON_ASSEGNARE_GIORNO"&&r.params.giorno===g)||(r.tipo==="GIORNO_LIBERO"&&r.params.giornoSett===dow(anno,mese,g)))) push(`Giorno libero violato: ${p}, giorno ${g}`,[p,g]);
+        if(r.tipo==="NON_CON" && r.params.persona===p && presenti.includes(r.params.persona2)) push(`Coppia da evitare violata: ${p} e ${r.params.persona2}, giorno ${g}`,[p,g],[r.params.persona2,g]);
       }
-      de[p]=g;
-      if(isWeekend(anno,mese,g)){ he[p]=(he[p]||0)+1; uw[p]=settimanaGlobale(anno,mese,g); }
-      const w = settimanaDi(anno,mese,g); lt[p][w]=(lt[p][w]||0)+1;
-      const d = dow(anno,mese,g); ut[p][d]=(ut[p][d]||0)+1;
-    });
+      ultimo[p]=g;settimane[p][w]=(settimane[p][w]||0)+1;
+    }
   }
-  for(const r of regoleCustom){
-    if(r.tipo!=="MAX_TURNI") continue;
-    let tot=0;
-    for(let g=1; g<=J; g++){ const day=griglia[g]||{}; if(day.CUCINA===r.params.persona) tot++; if(day.SERVIZIO===r.params.persona) tot++; }
-    if(tot > r.params.max) push(`Massimo turni totali superato: ${r.params.persona} (${tot}/${r.params.max})`, [r.params.persona, -1]);
-  }
+  for(const r of regoleCustom) if(r.tipo==="MAX_TURNI" && totals[r.params.persona]>r.params.max)
+    violazioni.push({testo:`Massimo turni totali superato: ${r.params.persona} (${totals[r.params.persona]}/${r.params.max})`,
+      fisso:fissi.filter(f=>f.nome===r.params.persona).length>=totals[r.params.persona]});
   return violazioni;
 }
 
@@ -1680,7 +1684,7 @@ function generaGriglia(progressCb){
   if(persone.length===0) return {ok:false, errore:"Aggiungi almeno una persona prima di generare."};
   const weekendMese = elencoWeekendMese(anno, mese);
   const weekendPrimo = weekendMese[0], weekendUltimo = weekendMese[weekendMese.length-1];
-  const profili = {}; persone.forEach(p=> profili[p] = profiloDi(p));
+  const profili = Object.create(null); persone.forEach(p=> profili[p] = profiloDi(p));
   // Continuità col mese precedente: se esiste un piano generato per il mese immediatamente
   // prima, l'ultimo giorno/weekend lavorato da ogni persona viene "riportato" all'inizio di
   // questo mese, così riposo minimo/distanza weekend/consecutività valgono anche a cavallo
@@ -1693,6 +1697,8 @@ function generaGriglia(progressCb){
   // viene messo titolare quello stesso giorno; dopo la generazione vengono rimessi in griglia.
   const affiancamenti = (state.affiancamenti||[]).filter(a=> a.giorno>=1 && a.giorno<=J && !giorniSpecialiSet.has(a.giorno));
   const affSet = new Set(affiancamenti.map(a=> a.nome+"|"+a.giorno));
+  const formazione=Object.create(null);
+  persone.forEach(p=>{formazione[p]={};for(let g=1;g<=J;g++) formazione[p][g]={CUCINA:affiancamentiCompletati(p,"CUCINA",g),SERVIZIO:affiancamentiCompletati(p,"SERVIZIO",g)};});
   // Codice variante: se impostato, rende il piano riproducibile (stessi dati + stesso
   // codice = stesso piano). Se vuoto, si usa un seed casuale diverso a ogni generazione.
   const semeBase = state.codiceVariante && state.codiceVariante.trim()
@@ -1723,10 +1729,10 @@ function generaGriglia(progressCb){
       if(prof.escluso) conflitti.push(`Il turno fisso di ${f.nome} il giorno ${f.giorno} riguarda una persona esclusa dalla generazione`);
       if(f.ruolo==="CUCINA" && !prof.cucina) conflitti.push(`Il turno fisso di ${f.nome} il giorno ${f.giorno} assegna CUCINA ma il profilo non lo consente`);
       if(f.ruolo==="SERVIZIO" && !prof.servizio) conflitti.push(`Il turno fisso di ${f.nome} il giorno ${f.giorno} assegna SERVIZIO ma il profilo non lo consente`);
-      if(f.ruolo==="CUCINA" && prof.affCucinaRichiesti > affiancamentiCompletati(f.nome,"CUCINA"))
-        conflitti.push(`Il turno fisso di ${f.nome} il giorno ${f.giorno} assegna CUCINA, ma manca ancora affiancamento (${affiancamentiCompletati(f.nome,"CUCINA")}/${prof.affCucinaRichiesti})`);
-      if(f.ruolo==="SERVIZIO" && prof.affServizioRichiesti > affiancamentiCompletati(f.nome,"SERVIZIO"))
-        conflitti.push(`Il turno fisso di ${f.nome} il giorno ${f.giorno} assegna SERVIZIO, ma manca ancora affiancamento (${affiancamentiCompletati(f.nome,"SERVIZIO")}/${prof.affServizioRichiesti})`);
+      if(f.ruolo==="CUCINA" && prof.affCucinaRichiesti > affiancamentiCompletati(f.nome,"CUCINA",f.giorno))
+        conflitti.push(`Il turno fisso di ${f.nome} il giorno ${f.giorno} assegna CUCINA, ma manca ancora affiancamento (${affiancamentiCompletati(f.nome,"CUCINA",f.giorno)}/${prof.affCucinaRichiesti})`);
+      if(f.ruolo==="SERVIZIO" && prof.affServizioRichiesti > affiancamentiCompletati(f.nome,"SERVIZIO",f.giorno))
+        conflitti.push(`Il turno fisso di ${f.nome} il giorno ${f.giorno} assegna SERVIZIO, ma manca ancora affiancamento (${affiancamentiCompletati(f.nome,"SERVIZIO",f.giorno)}/${prof.affServizioRichiesti})`);
     }
   });
   // Due turni fissi della STESSA persona possono confliggere fra loro rispetto alle
@@ -1797,13 +1803,13 @@ function generaGriglia(progressCb){
     return false;
   }
 
-  function valida(persona, giorno, ruolo, ie, de, he, lt, ut, K, uw, giorniOcc, weekendOcc){
+  function valida(persona, giorno, ruolo, ie, de, he, lt, ut, K, uw, giorniOcc, weekendOcc,weekendCorrentiOcc){
     const day = ie[giorno];
     if(profili[persona].escluso) return false;
     if(ruolo==="CUCINA" && !profili[persona].cucina) return false;
     if(ruolo==="SERVIZIO" && !profili[persona].servizio) return false;
-    if(ruolo==="CUCINA" && profili[persona].affCucinaRichiesti > affiancamentiCompletati(persona,"CUCINA")) return false;
-    if(ruolo==="SERVIZIO" && profili[persona].affServizioRichiesti > affiancamentiCompletati(persona,"SERVIZIO")) return false;
+    if(ruolo==="CUCINA" && profili[persona].affCucinaRichiesti > formazione[persona][giorno].CUCINA) return false;
+    if(ruolo==="SERVIZIO" && profili[persona].affServizioRichiesti > formazione[persona][giorno].SERVIZIO) return false;
     if(personaIndisponibile(persona, giorno)) return false;
     if(affSet.has(persona+"|"+giorno)) return false; // quel giorno è già in affiancamento
     if(regole.noDoppio && (day.CUCINA===persona || day.SERVIZIO===persona)) return false;
@@ -1824,9 +1830,12 @@ function generaGriglia(progressCb){
     }
     if(regole.maxSettimana){
       const w = settimanaDi(anno,mese,giorno);
-      if((lt[persona][w]||0) >= regole.maxSettimanaVal) return false;
+      if(!giorniOcc[persona].has(giorno) && (lt[persona][w]||0) >= regole.maxSettimanaVal) return false;
     }
-    if(regole.maxWeekend && isWeekend(anno,mese,giorno) && (he[persona]||0) >= regole.maxWeekendVal) return false;
+    if(regole.maxWeekend && isWeekend(anno,mese,giorno)){
+      const w=settimanaGlobale(anno,mese,giorno);
+      if(!weekendCorrentiOcc[persona].has(w) && weekendCorrentiOcc[persona].size>=regole.maxWeekendVal) return false;
+    }
     if(regole.distanzaWeekend && isWeekend(anno,mese,giorno)){
       const wg = settimanaGlobale(anno,mese,giorno);
       for(const wc of weekendOcc[persona]){
@@ -1837,11 +1846,15 @@ function generaGriglia(progressCb){
       if(r.tipo==="NON_ASSEGNARE_GIORNO" && r.params.persona===persona && r.params.giorno===giorno) return false;
       if(r.tipo==="MAX_TURNI" && r.params.persona===persona && (K[persona]||0) >= r.params.max) return false;
       if(r.tipo==="NON_CON"){
-        const altro = day.CUCINA || day.SERVIZIO;
+        const altro = day[ruolo==="CUCINA" ? "SERVIZIO" : "CUCINA"];
         if(altro && ((r.params.persona===persona && r.params.persona2===altro) ||
                       (r.params.persona2===persona && r.params.persona===altro))) return false;
       }
       if(r.tipo==="GIORNO_LIBERO" && r.params.persona===persona && r.params.giornoSett===dow(anno,mese,giorno)) return false;
+    }
+    for(const r of regoleCustom) if(r.tipo==="NON_CON"){
+      const altri=affiancamenti.filter(a=>a.giorno===giorno).map(a=>a.nome);
+      if((r.params.persona===persona&&altri.includes(r.params.persona2)) || (r.params.persona2===persona&&altri.includes(r.params.persona))) return false;
     }
     return true;
   }
@@ -1855,6 +1868,22 @@ function generaGriglia(progressCb){
       conflitti.push(`${a.nome} il giorno ${a.giorno} ha sia un turno fisso che un affiancamento`);
   });
 
+  const manuale=Object.fromEntries(Array.from({length:J},(_,i)=>[i+1,{CUCINA:null,SERVIZIO:null}]));
+  fissi.forEach(f=>manuale[f.giorno][f.ruolo]=f.nome);
+  affiancamenti.forEach(a=>manuale[a.giorno][a.ruolo==="CUCINA"?"affCucina":"affServizio"]=a.nome);
+  const erroriManuali=validaPianoIndipendente(manuale,{anno,mese,persone,regole,regoleCustom,personaIndisponibile,fissi,continuita})
+    .filter(v=>!v.fisso&&!v.testo.startsWith("Turno scoperto:"));
+  if(erroriManuali.length)return {ok:false,errore:"Presenze manuali incompatibili con i vincoli. Correggi i dati indicati.",conflitti:erroriManuali.map(v=>v.testo)};
+  const scoperti=[];
+  for(let g=1;g<=J;g++)if(!giorniSpecialiSet.has(g))for(const ruolo of ["CUCINA","SERVIZIO"]){
+    if(manuale[g][ruolo])continue;
+    const disponibili=persone.filter(p=>!profili[p].escluso&&profili[p][ruolo==="CUCINA"?"cucina":"servizio"]&&
+      (ruolo==="CUCINA"?profili[p].affCucinaRichiesti:profili[p].affServizioRichiesti)<=formazione[p][g][ruolo]&&
+      !personaIndisponibile(p,g)&&!affSet.has(p+"|"+g)&&
+      !regoleCustom.some(r=>r.params.persona===p&&((r.tipo==="NON_ASSEGNARE_GIORNO"&&r.params.giorno===g)||(r.tipo==="GIORNO_LIBERO"&&r.params.giornoSett===dow(anno,mese,g)))));
+    if(!disponibili.length)scoperti.push(`Nessuna persona disponibile e abilitata: ${ruolo}, giorno ${g}`);
+  }
+  if(scoperti.length)return {ok:false,errore:"Alcuni turni non hanno candidati. Aggiungi disponibilità o correggi i profili.",conflitti:scoperti};
   let migliore = null, punteggioMigliore = Infinity, migliorStats = null, tentativiRiusciti = 0;
 
   for(let iter=0; iter<ITERAZIONI; iter++){
@@ -1863,25 +1892,26 @@ function generaGriglia(progressCb){
     const ie = {}; for(let g=1; g<=J; g++) ie[g] = {CUCINA:null, SERVIZIO:null};
     fissi.forEach(f=>{ ie[f.giorno][f.ruolo] = f.nome; });
 
-    const K={}, rt={}, sv={}, he={}, de={}, lt={}, ut={}, uw={};
-    const giorniOcc = {}, weekendOcc = {};
-    persone.forEach(p=>{ K[p]=0; rt[p]=0; sv[p]=0; he[p]=0; de[p]=-100; lt[p]={}; ut[p]={}; giorniOcc[p]=new Set(); weekendOcc[p]=new Set(); });
+    const K=Object.create(null),rt=Object.create(null),sv=Object.create(null),he=Object.create(null),de=Object.create(null),lt=Object.create(null),ut=Object.create(null),uw=Object.create(null);
+    const giorniOcc = Object.create(null), weekendOcc = Object.create(null),weekendCorrentiOcc=Object.create(null),weekendPrincipali=Object.create(null);
+    persone.forEach(p=>{ K[p]=0; rt[p]=0; sv[p]=0; he[p]=0; de[p]=-100; lt[p]={}; ut[p]={}; giorniOcc[p]=new Set(); weekendOcc[p]=new Set();weekendCorrentiOcc[p]=new Set();weekendPrincipali[p]=new Set(); });
     fissi.forEach(f=>{
       K[f.nome]=(K[f.nome]||0)+1;
       if(f.ruolo==="CUCINA") rt[f.nome]=(rt[f.nome]||0)+1; else sv[f.nome]=(sv[f.nome]||0)+1;
-      if(isWeekend(anno,mese,f.giorno)) he[f.nome]=(he[f.nome]||0)+1;
+      if(isWeekend(anno,mese,f.giorno)){weekendPrincipali[f.nome].add(settimanaGlobale(anno,mese,f.giorno));he[f.nome]=weekendPrincipali[f.nome].size;}
       // de/uw restano un utile riepilogo "ultimo giorno/weekend" solo per l'ordinamento
       // dei candidati (preferenza, non vincolo): la correttezza dei vincoli veri e propri
       // si basa sugli insiemi giorniOcc/weekendOcc qui sotto, che ricordano OGNI giorno
       // impegnato dalla persona, non solo il più recente.
       de[f.nome] = Math.max(de[f.nome], f.giorno);
+      const giaPresente=giorniOcc[f.nome].has(f.giorno);
       giorniOcc[f.nome].add(f.giorno);
-      const w = settimanaDi(anno,mese,f.giorno); lt[f.nome][w]=(lt[f.nome][w]||0)+1;
+      const w = settimanaDi(anno,mese,f.giorno); if(!giaPresente)lt[f.nome][w]=(lt[f.nome][w]||0)+1;
       const d = dow(anno,mese,f.giorno); ut[f.nome][d]=(ut[f.nome][d]||0)+1;
       if(isWeekend(anno,mese,f.giorno)){
         const wg = settimanaGlobale(anno,mese,f.giorno);
         uw[f.nome] = (uw[f.nome]===undefined) ? wg : Math.max(uw[f.nome], wg);
-        weekendOcc[f.nome].add(wg);
+        weekendOcc[f.nome].add(wg);weekendCorrentiOcc[f.nome].add(wg);
       }
     });
     Object.keys(continuita).forEach(p=>{
@@ -1897,6 +1927,18 @@ function generaGriglia(progressCb){
       }
     });
 
+    const presenzeManuali = {};
+    affiancamenti.forEach(a=>{ (presenzeManuali[a.giorno] ||= new Set()).add(a.nome); });
+    (state.giorniSpeciali||[]).filter(gs=>gs.giorno>=1&&gs.giorno<=J).forEach(gs=>{
+      [...gs.cucina,...gs.servizio].forEach(p=>{(presenzeManuali[gs.giorno] ||= new Set()).add(p);});
+    });
+    Object.entries(presenzeManuali).forEach(([gg,nomi])=>{const g=Number(gg);nomi.forEach(p=>{
+      if(!giorniOcc[p] || giorniOcc[p].has(g)) return;
+      giorniOcc[p].add(g);
+      const w=settimanaDi(anno,mese,g);lt[p][w]=(lt[p][w]||0)+1;
+      if(isWeekend(anno,mese,g)){const w=settimanaGlobale(anno,mese,g);weekendOcc[p].add(w);weekendCorrentiOcc[p].add(w);}
+    });});
+    persone.forEach(p=>{const w=settimanaDi(anno,mese,1);lt[p][w]=(lt[p][w]||0)+(continuita[p]?.turniSettimana||0);});
     const slot = [];
     for(let g=1; g<=J; g++){
       if(giorniSpecialiSet.has(g)) continue; // giorno a squadra: gestito solo a mano, il generatore non lo tocca
@@ -1917,7 +1959,7 @@ function generaGriglia(progressCb){
     let preferenzeSoddisfatte = 0;
     let fallita = false;
     for(const s of slot){
-      const candidati = persone.filter(p=> valida(p, s.giorno, s.ruolo, ie, de, he, lt, ut, K, uw, giorniOcc, weekendOcc));
+      const candidati = persone.filter(p=> valida(p, s.giorno, s.ruolo, ie, de, he, lt, ut, K, uw, giorniOcc, weekendOcc,weekendCorrentiOcc));
       if(candidati.length===0){ fallita = true; break; }
       // preferenza "coppia preferita": chi si abbinerebbe al partner già assegnato
       // sull'altro ruolo dello stesso giorno riceve una piccola spinta nell'ordinamento
@@ -1949,10 +1991,11 @@ function generaGriglia(progressCb){
       ie[s.giorno][s.ruolo] = scelto;
       K[scelto]++;
       if(s.ruolo==="CUCINA") rt[scelto]++; else sv[scelto]++;
-      if(isWeekend(anno,mese,s.giorno)){ he[scelto]++; const wg2 = settimanaGlobale(anno,mese,s.giorno); uw[scelto] = wg2; weekendOcc[scelto].add(wg2); }
+      if(isWeekend(anno,mese,s.giorno)){const wg2=settimanaGlobale(anno,mese,s.giorno);weekendPrincipali[scelto].add(wg2);he[scelto]=weekendPrincipali[scelto].size;uw[scelto]=wg2;weekendOcc[scelto].add(wg2);weekendCorrentiOcc[scelto].add(wg2);}
       de[scelto] = s.giorno;
+      const giaPresente=giorniOcc[scelto].has(s.giorno);
       giorniOcc[scelto].add(s.giorno);
-      const w = settimanaDi(anno,mese,s.giorno); lt[scelto][w]=(lt[scelto][w]||0)+1;
+      const w = settimanaDi(anno,mese,s.giorno); if(!giaPresente)lt[scelto][w]=(lt[scelto][w]||0)+1;
       const d = dow(anno,mese,s.giorno); ut[scelto][d]=(ut[scelto][d]||0)+1;
     }
     if(fallita) continue;
@@ -1976,7 +2019,7 @@ function generaGriglia(progressCb){
   }
 
   if(!migliore){
-    return {ok:false, errore:"Non è stato possibile generare una griglia valida: le regole attive sono troppo restrittive per il numero di persone disponibili. Prova a rilassare qualche vincolo.", conflitti};
+    return {ok:false, errore:"Non è stato possibile generare una griglia valida: nessuna soluzione trovata nei tentativi eseguiti. Controlla disponibilità e vincoli o prova un altro codice variante; questo risultato non dimostra che una soluzione sia impossibile.", conflitti};
   }
 
   // Rimette nel piano gli affiancamenti programmati (il generatore non li tocca mai)
@@ -1989,8 +2032,9 @@ function generaGriglia(progressCb){
   // (i turni fissi possono legittimamente scavalcare le regole): le scorporo per non
   // generare un doppio avviso e per riservare l'allarme "anomalia" ai casi realmente inspiegati.
   const violazioniReali = violazioniValidatore.filter(v=>!v.fisso);
+  violazioniValidatore.filter(v=>v.fisso).forEach(v=>{if(!conflitti.includes(v.testo)) conflitti.push("Deroga per turno fisso: "+v.testo);});
   if(violazioniReali.length){
-    violazioniReali.forEach(v=> conflitti.push("⚠️ Validatore indipendente: " + v.testo));
+    return {ok:false,errore:"Il piano non supera la verifica finale. Correggi le presenze manuali o i vincoli indicati.",conflitti:violazioniReali.map(v=>v.testo)};
   }
 
   let equilibrio = "ottimo";
@@ -2055,55 +2099,66 @@ function renderConflittiBloccanti(conflitti){
     msg.appendChild(box);
   });
 }
-function eseguiGenerazione(){
-  const msg = document.getElementById("msgGenera");
-  const prog = document.getElementById("prog");
-  const btn = document.getElementById("btnGenera");
-  const btnVar = document.getElementById("btnVariante");
-  const conflittiBloccanti = trovaConflittiFissoIndisponibilita();
-  if(conflittiBloccanti.length){
-    renderConflittiBloccanti(conflittiBloccanti);
-    return;
-  }
-  msg.innerHTML = "";
-  prog.style.display = "block"; prog.value = 0;
-  btn.disabled = true; btnVar.disabled = true;
-  setTimeout(()=>{
-    const risultato = generaGriglia((p)=>{ prog.value = p; });
-    prog.style.display = "none"; btn.disabled = false; btnVar.disabled = false;
-    if(!risultato.ok){
-      msg.innerHTML = `<div class="msg bad">${escHtml(risultato.errore)}</div>`;
-      if(risultato.conflitti && risultato.conflitti.length)
-        msg.innerHTML += risultato.conflitti.map(c=>`<div class="msg bad">${escHtml(c)}</div>`).join("");
-      return;
-    }
-    state.griglia = risultato.griglia;
-    state.stats = risultato.stats;
-    state.pianoInfo = risultato.pianoInfo;
-    state.pianoFingerprint = fingerprintDi(datiRilevantiPiano());
-    salvaNelloStorico();
-    salvaLocale();
-    const info = risultato.pianoInfo;
-    let html = `<div class="msg ok">Piano generato e aggiornato · tentativi riusciti ${info.tentativiRiusciti}/${info.tentativiTotali} ·
-      equilibrio: ${info.equilibrio} · codice variante: ${escHtml(info.codiceVariante || "casuale (non riproducibile)")}</div>`;
-    const nContinuita = Object.keys(continuitaMesePrecedente()).length;
-    if(nContinuita>0) html += `<div class="msg info">Continuità con il mese precedente applicata per ${nContinuita} persona/e (riposo minimo, distanza weekend).</div>`;
-    if(!info.validato) html += `<div class="msg bad">Il validatore indipendente ha rilevato anomalie: vedi sotto.</div>`;
-    if(risultato.conflitti && risultato.conflitti.length)
-      html += risultato.conflitti.map(c=>`<div class="msg bad">${escHtml(c)}</div>`).join("");
-    msg.innerHTML = html;
-    renderCalendario();
-    renderRiepilogo();
-  }, 30);
+let generazioneWorker=null, generazioneToken=0, generazioneURL=null;
+function sorgenteMotore(){
+  return '"use strict";let state;const ITERAZIONI='+ITERAZIONI+';\n'+
+    [giorniNelMese,dow,isWeekend,settimanaDi,settimanaGlobale,chiaveMese,mesePrecedente,continuitaMesePrecedente,elencoWeekendMese,
+     profiloDi,affiancamentiCompletati,stessaCoppia,partnerPreferiti,preferisceData,preferisceGiornoSett,mulberry32,seedDaStringa,
+     validaPianoIndipendente,generaGriglia].map(fn=>fn.toString()).join('\n')+
+    '\nself.onmessage=e=>{state=e.data;try{const risultato=generaGriglia(v=>self.postMessage({tipo:"progresso",valore:v}));self.postMessage({tipo:"fine",risultato});}catch(e){self.postMessage({tipo:"errore",messaggio:e.message});}};';
 }
+function terminaGenerazione(){
+  if(generazioneWorker){generazioneWorker.terminate();generazioneWorker=null;}
+  if(generazioneURL){URL.revokeObjectURL(generazioneURL);generazioneURL=null;}
+  document.getElementById("prog").style.display="none";
+  document.getElementById("btnGenera").disabled=false;document.getElementById("btnVariante").disabled=false;
+  document.getElementById("btnAnnullaGenerazione").hidden=true;
+}
+function annullaGenerazione(){generazioneToken++;terminaGenerazione();document.getElementById("msgGenera").textContent="Generazione annullata. Il piano precedente è stato conservato.";}
+async function eseguiGenerazione(codiceNuovo){
+  if(generazioneWorker) return;
+  const msg=document.getElementById("msgGenera"),prog=document.getElementById("prog");
+  const conflitti=trovaConflittiFissoIndisponibilita();if(conflitti.length){renderConflittiBloccanti(conflitti);return;}
+  const errore=validaStrutturaBackup(state);if(errore){msg.textContent=errore;return;}
+  const token=++generazioneToken,impronta=fingerprintDi(datiRilevantiPiano());
+  const snapshot=JSON.parse(JSON.stringify(state));if(typeof codiceNuovo==="string")snapshot.codiceVariante=codiceNuovo;
+  msg.textContent="Generazione in corso…";prog.style.display="block";prog.value=0;
+  document.getElementById("btnGenera").disabled=true;document.getElementById("btnVariante").disabled=true;
+  document.getElementById("btnAnnullaGenerazione").hidden=false;
+  let risultato;
+  try{
+    risultato=await new Promise((resolve,reject)=>{
+      try{generazioneURL=URL.createObjectURL(new Blob([sorgenteMotore()],{type:"text/javascript"}));generazioneWorker=new Worker(generazioneURL);}catch(e){reject(new Error("Il browser non avvia il calcolo separato. Apri l’app tramite HTTPS o localhost."));return;}
+      generazioneWorker.onmessage=e=>{
+        if(e.data.tipo==="progresso")prog.value=e.data.valore;
+        else if(e.data.tipo==="errore")reject(new Error(e.data.messaggio));
+        else resolve(e.data.risultato);
+      };
+      generazioneWorker.onerror=()=>reject(new Error("Il motore di generazione non si carica. Riapri la pagina in un browser aggiornato."));
+      generazioneWorker.postMessage(snapshot);
+    });
+    if(token!==generazioneToken)return;
+    if(impronta!==fingerprintDi(datiRilevantiPiano())){msg.textContent="Dati modificati durante il calcolo: genera di nuovo per usare i nuovi dati.";return;}
+    if(!risultato.ok){msg.innerHTML=`<div class="msg bad">${escHtml(risultato.errore)}</div>`+(risultato.conflitti||[]).map(t=>`<div class="msg bad">${escHtml(t)}</div>`).join("");return;}
+    registraAnnullamento();
+    state.codiceVariante=snapshot.codiceVariante;
+    document.getElementById("inCodiceVariante").value=state.codiceVariante;
+    state.griglia=risultato.griglia;state.pianoInfo=risultato.pianoInfo;
+    state.pianoFingerprint=fingerprintDi(datiRilevantiPiano());ricalcolaStatsDaGriglia();salvaNelloStorico();salvaLocale();
+    const info=state.pianoInfo;
+    msg.innerHTML=`<div class="msg ok">Piano generato · tentativi riusciti ${info.tentativiRiusciti}/${info.tentativiTotali} · equilibrio: ${escHtml(info.equilibrio)} · variante: ${escHtml(info.codiceVariante||"casuale")}</div>`+(risultato.conflitti||[]).map(t=>`<div class="msg bad">${escHtml(t)}</div>`).join("");
+    renderCalendario();renderRiepilogo();renderArchivio();
+  }catch(e){if(token===generazioneToken)msg.textContent="Generazione non riuscita: "+e.message;}
+  finally{if(token===generazioneToken)terminaGenerazione();}
+}
+
 function initGenera(){
+  document.getElementById("btnAnnullaGenerazione").onclick=annullaGenerazione;
+  document.getElementById("btnUndo").onclick=()=>spostaAnnullamento(false);
+  document.getElementById("btnRedo").onclick=()=>spostaAnnullamento(true);
   document.getElementById("btnGenera").onclick = eseguiGenerazione;
-  document.getElementById("btnVariante").onclick = ()=>{
-    state.codiceVariante = String(Math.floor(100000 + Math.random()*900000));
-    document.getElementById("inCodiceVariante").value = state.codiceVariante;
-    salvaLocale();
-    eseguiGenerazione();
-  };
+  document.getElementById("btnVariante").onclick = ()=>eseguiGenerazione(String(Math.floor(100000+Math.random()*900000)));
+
   renderCalendario();
 }
 // Versione riusabile di "personaIndisponibile" al di fuori di generaGriglia (usata
@@ -2154,7 +2209,7 @@ function contaSupporto(){
       [day.affCucina, day.affServizio].forEach(p=>{ if(p && supporto[p]!==undefined) supporto[p]++; });
     }
   }
-  (state.giorniSpeciali||[]).forEach(gs=>{
+  (state.giorniSpeciali||[]).filter(gs=>gs.giorno>=1&&gs.giorno<=J).forEach(gs=>{
     gs.cucina.forEach(p=>{ if(supporto[p]!==undefined) supporto[p]++; });
     gs.servizio.forEach(p=>{ if(supporto[p]!==undefined) supporto[p]++; });
   });
@@ -2162,7 +2217,7 @@ function contaSupporto(){
 }
 function ricalcolaStatsDaGriglia(){
   const K={}, rt={}, sv={}, he={};
-  state.persone.forEach(p=>{ K[p]=0; rt[p]=0; sv[p]=0; he[p]=0; });
+  state.persone.forEach(p=>{ K[p]=0; rt[p]=0; sv[p]=0; he[p]=new Set(); });
   const J = giorniNelMese(state.anno, state.mese);
   for(let g=1; g<=J; g++){
     const day = state.griglia[g];
@@ -2172,9 +2227,10 @@ function ricalcolaStatsDaGriglia(){
       if(!p || K[p]===undefined) return;
       K[p]++;
       if(ruolo==="CUCINA") rt[p]++; else sv[p]++;
-      if(isWeekend(state.anno,state.mese,g)) he[p]++;
+      if(isWeekend(state.anno,state.mese,g)) he[p].add(settimanaGlobale(state.anno,state.mese,g));
     });
   }
+  state.persone.forEach(p=>he[p]=he[p].size);
   state.stats = {K, rt, sv, he};
 }
 // Dopo una modifica manuale ricontrolla il piano con lo stesso validatore indipendente
@@ -2187,8 +2243,8 @@ function rivalidaDopoModificaManuale(){
     continuita: continuitaMesePrecedente()
   };
   const viol = validaPianoIndipendente(state.griglia, ctx);
-  const avvisi = viol.filter(v=>!v.fisso).map(v=>v.testo);
-  state.pianoInfo = Object.assign({}, state.pianoInfo, {modificatoManualmente:true, avvisiModifica: avvisi});
+  const avvisi = viol.map(v=>(v.fisso?"Deroga turno fisso: ":"")+v.testo);
+  state.pianoInfo = Object.assign({}, state.pianoInfo, {modificatoManualmente:true, validato:viol.every(v=>v.fisso), avvisiModifica: avvisi});
 }
 
 function renderCalendario(){
@@ -2278,9 +2334,11 @@ function renderCalendario(){
             }
           }
 
+          registraAnnullamento();
           state.griglia[g][ruolo] = nuovoValore;
           ricalcolaStatsDaGriglia();
           rivalidaDopoModificaManuale();
+          salvaNelloStorico();
           salvaLocale();
           renderCalendario();
           renderRiepilogo();
@@ -2296,9 +2354,11 @@ function renderCalendario(){
           btn.style.cssText = "border:none;background:none;cursor:pointer;font-size:8px;margin-left:2px;padding:0;vertical-align:middle";
           btn.onclick = (ev)=>{
             ev.stopPropagation();
+            registraAnnullamento();
             state.fissi.push({giorno:g, ruolo, nome: day[ruolo]});
             // Il piano resta valido: il nuovo fisso coincide con l'assegnazione già presente
             state.pianoFingerprint = fingerprintDi(datiRilevantiPiano());
+            salvaNelloStorico();
             salvaLocale();
             renderFissi(); renderCalendario(); renderRiepilogo();
           };
@@ -2329,9 +2389,15 @@ function renderCalendario(){
                 affSel.value = day[affKey] || ""; return;
               }
             }
+            const prima=JSON.parse(JSON.stringify(state));
             impostaAffiancamento(g, ruolo, nuovoAff);
+            rivalidaDopoModificaManuale();
+            const nuovi=(state.pianoInfo.avvisiModifica||[]).filter(t=>!(prima.pianoInfo?.avvisiModifica||[]).includes(t));
+            if(nuovi.length && !confirm("Questo affiancamento richiede attenzione:\n"+nuovi.join("\n")+"\n\nApplicarlo comunque?")){state=prima;renderCalendario();return;}
+            registraAnnullamento(prima);
             ricalcolaStatsDaGriglia();
             rivalidaDopoModificaManuale();
+            salvaNelloStorico();
             salvaLocale();
             renderAffiancamenti(); renderPersone();
             renderCalendario();
@@ -2799,189 +2865,108 @@ function pdfRettangoloRiempito(x,y,w,h,grigio){
   return `${grigio} g ${x.toFixed(2)} ${y.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f\n0 g\n`;
 }
 
+function pdfLarghezza(str,size){
+  const narrow="ijlItfr.,:;!'| ",wide="MWmw@%",mid="ABCDEFGHKNOPQRSTUVXYZabcdefghknopqsuvxyz023456789";
+  return [...String(str)].reduce((n,c)=>n+(narrow.includes(c)?0.34:wide.includes(c)?1:mid.includes(c)?0.7:0.75)*size,0);
+}
+function pdfRighe(str,width,size){
+  const lines=[];let line="";
+  for(const word of String(str||"—").split(/\s+/)){
+    if(pdfLarghezza((line?line+" ":"")+word,size)<=width){line+=(line?" ":"")+word;continue;}
+    if(line){lines.push(line);line="";}
+    for(const c of word){if(line&&pdfLarghezza(line+c,size)>width){lines.push(line);line="";}line+=c;}
+  }
+  if(line)lines.push(line);return lines.length?lines:["—"];
+}
 function generaPDF(){
-  const J = giorniNelMese(state.anno, state.mese);
-  const orizzontale = state.stilePagina1 !== "lista"; // calendario = A4 orizzontale, elenco = A4 verticale
-  const pageW = orizzontale ? 842 : 595, pageH = orizzontale ? 595 : 842;
-  const marginX = 22, marginTop = 62, marginBottom = 20;
-  const titolo = (state.nomeProgetto && state.nomeProgetto.trim()) ? state.nomeProgetto.trim() : "Turni";
-  const info = state.pianoInfo || {};
-
-  /* ---------- Pagina 1: tutti i turni, stile calendario o elenco a scelta ---------- */
-  let c1 = "";
-  c1 += pdfTextGrassetto(marginX, pageH-24, 16, `${titolo} — ${MESI[state.mese]} ${state.anno}`);
-  c1 += pdfText(marginX, pageH-40, 9,
-    `Generato il ${info.generatoIl ? new Date(info.generatoIl).toLocaleString("it-IT") : "—"} · equilibrio: ${info.equilibrio||"—"} · weekend evidenziati`);
-
-  if(state.stilePagina1==="lista"){
-    // Stile elenco: un giorno per riga. Giorno/Data/Giorno sett. tenuti stretti (giusto lo
-    // spazio per il contenuto, con un font leggermente più piccolo dedicato a loro), lo
-    // spazio recuperato va tutto a CUCINA e SERVIZIO.
-    const top = pageH - marginTop, bottom = marginBottom;
-    const righeTot = J + 1; // +1 intestazione
-    const larghezzaTot = pageW - marginX*2;
-    const rowH = (top - bottom) / righeTot;
-    const fontRiga = Math.max(8, Math.min(13, rowH - 5));
-    const fontStretto = 8; // font fisso per le colonne strette, indipendente dall'altezza riga
-    const colsDef = [
-      {t:"Giorno", w:0.075, stretta:true}, {t:"Data", w:0.11, stretta:true},
-      {t:"G. sett.", w:0.075, stretta:true}, {t:"CUCINA", w:0.37}, {t:"SERVIZIO", w:0.37}
-    ];
-    const xs = [marginX];
-    colsDef.forEach(c=> xs.push(xs[xs.length-1] + c.w*larghezzaTot));
-
-    // La base del testo si misura sempre dal bordo SUPERIORE della riga (stesso principio
-    // usato con successo nello stile calendario), non con una formula di centratura che
-    // rischia di far sovrapporre il testo alla riga sopra se il font è più grande del previsto.
-    const baseline = (rowTop)=> rowTop - fontRiga*0.85 - 2;
-    colsDef.forEach((c,i)=> c1 += pdfTextGrassetto(xs[i]+3, baseline(top), c.stretta?fontStretto:Math.min(fontRiga,11), c.t));
-    for(let g=1; g<=J; g++){
-      const rowTop = top - rowH*g;
-      const data = new Date(state.anno, state.mese-1, g).toLocaleDateString("it-IT");
-      const gs = GIORNI_SETT[(()=>{const d=dow(state.anno,state.mese,g); return d===0?6:d-1;})()];
-      const we = isWeekend(state.anno,state.mese,g);
-      const giornoSpeciale = (state.giorniSpeciali||[]).find(x=> x.giorno===g);
-      if(giornoSpeciale) c1 += pdfRettangoloRiempito(marginX, rowTop-rowH, larghezzaTot, rowH, 0.90);
-      else if(we) c1 += pdfRettangoloRiempito(marginX, rowTop-rowH, larghezzaTot, rowH, 0.94);
-      let testoCucina = testoCellaGiorno(g, "CUCINA");
-      const vals = [String(g), data, gs, testoCucina, testoCellaGiorno(g, "SERVIZIO")];
-      vals.forEach((v,i)=>{
-      const sz = colsDef[i].stretta?fontStretto:fontRiga;
-      const pad = i<3?3:5;
-      c1 += pdfText(xs[i]+pad, baseline(rowTop), sz, pdfTronca(v, xs[i+1]-xs[i]-pad*2, sz));
-    });
+  const J=giorniNelMese(state.anno,state.mese),landscape=state.stilePagina1!=="lista";
+  const W=landscape?842:595,H=landscape?595:842,M=24,B=28,pages=[];
+  const titolo=(state.nomeProgetto||"Turni").trim()||"Turni",periodo=MESI[state.mese]+" "+state.anno;
+  let page="",y=H-30;
+  const finish=()=>{page+=pdfText(W-95,16,8,`Pagina ${pages.length+1}`);pages.push(page);page="";};
+  const newPage=(header)=>{if(page)finish();y=H-30;for(const line of pdfRighe(header,W-2*M,14)){page+=pdfTextGrassetto(M,y,14,line);y-=18;}y-=8;};
+  const ensure=(height,header)=>{if(y-height<B)newPage(header);};
+  const paragraph=(text,size=9,bold=false)=>{
+    for(const line of pdfRighe(text,W-2*M,size)){ensure(size+5,"Segue - "+periodo);page+=(bold?pdfTextGrassetto:pdfText)(M,y,size,line);y-=size+5;}
+  };
+  newPage(titolo+" - "+periodo);
+  paragraph(`Generato: ${state.pianoInfo?.generatoIl?new Date(state.pianoInfo.generatoIl).toLocaleString("it-IT"):"—"} · equilibrio: ${state.pianoInfo?.equilibrio||"—"}`,8);
+  paragraph("Affiancamenti e squadre sono indicati nei dettagli quando non entrano nella griglia.",8);
+  const details=[];
+  if(landscape){
+    const top=y,colW=(W-2*M)/7,offset=(dow(state.anno,state.mese,1)+6)%7,rows=Math.ceil((offset+J)/7),headerH=22,rowH=(top-B-headerH)/rows;
+    GIORNI_SETT.forEach((g,i)=>{page+=pdfTextGrassetto(M+i*colW+5,top-15,10,g);});
+    const bodyTop=top-headerH;
+    for(let g=1;g<=J;g++){
+      const idx=offset+g-1,row=Math.floor(idx/7),col=idx%7,x=M+col*colW,t=bodyTop-row*rowH;
+      if(isWeekend(state.anno,state.mese,g))page+=pdfRettangoloRiempito(x,t-rowH,colW,rowH,0.95);
+      const gs=(state.giorniSpeciali||[]).find(v=>v.giorno===g);
+      const texts=["C: "+testoCellaGiorno(g,"CUCINA"),"S: "+testoCellaGiorno(g,"SERVIZIO")];
+      const size=8,lh=10,capacity=Math.max(2,Math.floor((rowH-24)/lh)),budget=Math.max(1,Math.floor(capacity/2));
+      const roles=texts.map(v=>pdfRighe(v,colW-10,size));
+      const more=roles.some(a=>a.length>budget)||!!gs;
+      if(more)details.push({g,gs});
+      page+=pdfTextGrassetto(x+5,t-14,10,String(g)+(more?" *":""));
+      const lines=gs?[`C: squadra (${gs.cucina.length})`,`S: squadra (${gs.servizio.length})`]:roles.flatMap(a=>a.slice(0,budget));
+      lines.forEach((v,i)=>page+=pdfText(x+5,t-27-i*lh,size,v));
     }
-    for(let r=0; r<=righeTot; r++) c1 += pdfLinea(marginX, top-r*rowH, marginX+larghezzaTot, top-r*rowH);
-    xs.forEach(x=> c1 += pdfLinea(x, top, x, top-rowH*righeTot));
-  } else {
-    // Stile calendario: griglia settimanale allargata a tutta la pagina, font ingranditi
-    const gridW = pageW - marginX*2;
-    const gridTop = pageH - marginTop;
-    const gridBottom = marginBottom;
-    const gridH = gridTop - gridBottom;
-    const cols = 7;
-    const colW = gridW/cols;
-    const headerH = 20;
-    const primoOffset = (()=>{ const d=dow(state.anno,state.mese,1); return d===0?6:d-1; })();
-    const totCelle = primoOffset + J;
-    const rowsCal = Math.ceil(totCelle/7);
-    const bodyTop = gridTop - headerH;
-    const bodyH = gridH - headerH;
-    const rowH = bodyH/rowsCal;
-
-    GIORNI_SETT.forEach((nome,i)=>{
-      c1 += pdfTextGrassetto(marginX + i*colW + 5, gridTop - 13, 11, nome);
-    });
-    c1 += pdfRettangoloRiempito(marginX + 5*colW, bodyTop-bodyH, colW*2, bodyH, 0.96);
-    // Sfondo dei giorni speciali: va disegnato PRIMA delle linee della griglia, altrimenti
-    // le coprirebbe (in un content stream PDF, ogni elemento si disegna sopra i precedenti).
-    for(let g=1; g<=J; g++){
-      if(!(state.giorniSpeciali||[]).some(x=> x.giorno===g)) continue;
-      const idx = primoOffset + (g-1);
-      const rI = Math.floor(idx/7), cI = idx%7;
-      c1 += pdfRettangoloRiempito(marginX+cI*colW, bodyTop-(rI+1)*rowH, colW, rowH, 0.90);
-    }
-    for(let r=0; r<=rowsCal; r++) c1 += pdfLinea(marginX, bodyTop-r*rowH, marginX+gridW, bodyTop-r*rowH);
-    for(let cI=0; cI<=cols; cI++) c1 += pdfLinea(marginX+cI*colW, bodyTop, marginX+cI*colW, bodyTop-bodyH);
-    c1 += pdfLinea(marginX, gridTop, marginX+gridW, gridTop);
-
-    for(let g=1; g<=J; g++){
-      const idx = primoOffset + (g-1);
-      const rI = Math.floor(idx/7), cI = idx%7;
-      const cellX = marginX + cI*colW, cellYTop = bodyTop - rI*rowH;
-      const giornoSpeciale = (state.giorniSpeciali||[]).find(x=> x.giorno===g);
-      if(giornoSpeciale){
-        c1 += pdfTextGrassetto(cellX+5, cellYTop-15, 11, String(g));
-        const wT = colW-10;
-        if(giornoSpeciale.etichetta) c1 += pdfText(cellX+5, cellYTop-27, 8, pdfTronca(giornoSpeciale.etichetta, wT, 8));
-        c1 += pdfText(cellX+5, cellYTop-(giornoSpeciale.etichetta?39:31), 9, pdfTronca("C: "+(giornoSpeciale.cucina.length?giornoSpeciale.cucina.join(", "):"—"), wT, 9));
-        c1 += pdfText(cellX+5, cellYTop-(giornoSpeciale.etichetta?52:44), 9, pdfTronca("S: "+(giornoSpeciale.servizio.length?giornoSpeciale.servizio.join(", "):"—"), wT, 9));
-      } else {
-        c1 += pdfTextGrassetto(cellX+5, cellYTop-15, 11, String(g));
-        c1 += pdfText(cellX+5, cellYTop-31, 9, pdfTronca("C: "+testoCellaGiorno(g,"CUCINA"), colW-10, 9));
-        c1 += pdfText(cellX+5, cellYTop-44, 9, pdfTronca("S: "+testoCellaGiorno(g,"SERVIZIO"), colW-10, 9));
+    for(let r=0;r<=rows;r++)page+=pdfLinea(M,bodyTop-r*rowH,W-M,bodyTop-r*rowH);
+    for(let c=0;c<=7;c++)page+=pdfLinea(M+c*colW,top,M+c*colW,bodyTop-rows*rowH);
+    page+=pdfLinea(M,top,W-M,top);y=B;
+  }else{
+    const widths=[42,82,(W-2*M-124)/2,(W-2*M-124)/2],size=9;
+    const header=()=>{let x=M;["Giorno","Data","CUCINA","SERVIZIO"].forEach((v,i)=>{page+=pdfTextGrassetto(x+4,y-12,9,v);x+=widths[i];});y-=22;};
+    header();
+    for(let g=1;g<=J;g++){
+      const gs=(state.giorniSpeciali||[]).find(v=>v.giorno===g);
+      if(gs?.etichetta)details.push({g,gs});
+      const vals=[String(g),`${g}/${state.mese}/${state.anno}`,testoCellaGiorno(g,"CUCINA"),testoCellaGiorno(g,"SERVIZIO")];
+      const lines=vals.map((v,i)=>pdfRighe(v,widths[i]-8,size)),maxLines=Math.max(...lines.map(a=>a.length));
+      // Split oversized rows across pages, keeping every name.
+      let n=0;while(n<maxLines){
+        if(y-24<B){newPage("Turni - "+periodo);header();}
+        const count=Math.min(maxLines-n,Math.floor((y-B-8)/12)),height=count*12+8;
+        if(isWeekend(state.anno,state.mese,g))page+=pdfRettangoloRiempito(M,y-height,W-2*M,height,0.95);
+        let x=M;lines.forEach((ls,i)=>{ls.slice(n,n+count).forEach((v,j)=>page+=pdfText(x+4,y-13-j*12,size,v));page+=pdfLinea(x,y,x,y-height);x+=widths[i];});
+        page+=pdfLinea(x,y,x,y-height);page+=pdfLinea(M,y,W-M,y);page+=pdfLinea(M,y-height,W-M,y-height);y-=height;n+=count;
       }
     }
   }
-
-  /* ---------- Pagina 2: riepilogo ---------- */
-  let c2 = "";
-  let y = pageH - 30;
-  c2 += pdfTextGrassetto(marginX, y, 15, `Riepilogo — ${titolo} — ${MESI[state.mese]} ${state.anno}`); y -= 22;
-  c2 += pdfText(marginX, y, 8, `Tentativi riusciti: ${info.tentativiRiusciti ?? "—"}/${info.tentativiTotali ?? "—"} · equilibrio: ${info.equilibrio||"—"} · codice variante: ${info.codiceVariante || "casuale"}`); y -= 24;
-
-  // tabella persona/totale/cucina/servizio/weekend
-  const s = state.stats || {};
-  const colsRiep = ["Persona","Totale","Cucina","Servizio","Weekend","Supporto"];
-  const wRiep = [160,78,78,78,78,78];
-  const supportoPdf = contaSupporto();
-  let x0 = marginX;
-  const rH = 16;
-  const tblTop = y;
-  colsRiep.forEach((t,i)=>{ c2 += pdfTextGrassetto(x0+4, tblTop-11, 9, t); x0 += wRiep[i]; });
-  let yy = tblTop - rH;
-  state.persone.forEach(p=>{
-    let xx = marginX;
-    const vals = [pdfTronca(p, wRiep[0]-8, 8), String(s.K?.[p]||0), String(s.rt?.[p]||0), String(s.sv?.[p]||0), String(s.he?.[p]||0), String(supportoPdf[p]||0)];
-    vals.forEach((v,i)=>{ c2 += pdfText(xx+4, yy-11, 8, v); xx += wRiep[i]; });
-    yy -= rH;
-  });
-  // bordi tabella riepilogo
-  const totRigheRiep = state.persone.length+1;
-  let xB = marginX;
-  for(let i=0;i<=colsRiep.length;i++){ c2 += pdfLinea(xB, tblTop, xB, tblTop-rH*totRigheRiep); if(i<wRiep.length) xB += wRiep[i]; }
-  for(let r=0;r<=totRigheRiep;r++) c2 += pdfLinea(marginX, tblTop-r*rH, marginX+wRiep.reduce((a,b)=>a+b,0), tblTop-r*rH);
-  y = yy - 16;
-
-  function sezioneElenco(titoloSezione, voci){
-    c2 += pdfTextGrassetto(marginX, y, 11, titoloSezione); y -= 14;
-    const elenco = voci.length ? voci : ["Nessuna"];
-    elenco.forEach(v=>{ c2 += pdfText(marginX+8, y, 8, "• "+v); y -= 12; });
-    y -= 8;
+  if(details.length){
+    newPage("Dettagli dei giorni - "+periodo);
+    for(const {g,gs} of details){ensure(48,"Dettagli dei giorni - "+periodo);paragraph(`Giorno ${g}${gs?.etichetta?" - "+gs.etichetta:""}`,10,true);paragraph("CUCINA: "+testoCellaGiorno(g,"CUCINA"));paragraph("SERVIZIO: "+testoCellaGiorno(g,"SERVIZIO"));y-=8;}
   }
-  sezioneElenco("Regole attive", descrizioneRegoleAttive());
-  sezioneElenco("Coppie", state.regoleCustom.map(etichettaRegolaCustom));
-  sezioneElenco("Indisponibilità", state.indisponibilita.map(etichettaIndisponibilita));
-  sezioneElenco("Profili personali", elencoProfiliPersonalizzati());
-
-  /* ---------- Serializzazione PDF (2 pagine, orientamento secondo lo stile scelto) ---------- */
-  let n = 1;
-  const catalogNum = n++, pagesNum = n++, fontNum = n++, fontBoldNum = n++;
-  const page1Num = n++, content1Num = n++, page2Num = n++, content2Num = n++;
-
-  const parts = [];
-  parts[catalogNum-1] = `<< /Type /Catalog /Pages ${pagesNum} 0 R >>`;
-  parts[pagesNum-1] = `<< /Type /Pages /Kids [${page1Num} 0 R ${page2Num} 0 R] /Count 2 >>`;
-  parts[fontNum-1] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>`;
-  parts[fontBoldNum-1] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>`;
-  const risorse = `/Resources << /Font << /F1 ${fontNum} 0 R /F2 ${fontBoldNum} 0 R >> >>`;
-  parts[page1Num-1] = `<< /Type /Page /Parent ${pagesNum} 0 R /MediaBox [0 0 ${pageW} ${pageH}] ${risorse} /Contents ${content1Num} 0 R >>`;
-  parts[content1Num-1] = {stream: c1};
-  parts[page2Num-1] = `<< /Type /Page /Parent ${pagesNum} 0 R /MediaBox [0 0 ${pageW} ${pageH}] ${risorse} /Contents ${content2Num} 0 R >>`;
-  parts[content2Num-1] = {stream: c2};
-
-  let pdf = "%PDF-1.4\n";
-  const offsets = [];
-  const totalObjs = n-1;
-  for(let i=1;i<=totalObjs;i++){
-    offsets[i] = pdf.length;
-    const body = parts[i-1];
-    if(body && typeof body === "object" && body.stream !== undefined){
-      const s2 = body.stream;
-      pdf += `${i} 0 obj\n<< /Length ${s2.length} >>\nstream\n${s2}\nendstream\nendobj\n`;
-    } else {
-      pdf += `${i} 0 obj\n${body}\nendobj\n`;
-    }
+  newPage("Riepilogo - "+periodo);
+  paragraph("Totale/Cucina/Servizio: turni normali. Weekend: weekend distinti dei turni normali. Supporto: affiancamenti e squadre.",8);
+  const widths=[(W-2*M)*0.38,...Array(5).fill((W-2*M)*0.62/5)],support=contaSupporto(),stats=state.stats||{};
+  const summaryHeader=()=>{let x=M;["Persona","Totale","Cucina","Servizio","Weekend","Supporto"].forEach((v,i)=>{page+=pdfTextGrassetto(x+3,y-12,8,v);x+=widths[i];});y-=22;};
+  summaryHeader();
+  for(const p of state.persone){
+    const lines=pdfRighe(p,widths[0]-8,9),height=Math.max(20,lines.length*12+8);
+    if(y-height<B){newPage("Riepilogo - "+periodo);summaryHeader();}
+    let x=M;lines.forEach((v,i)=>page+=pdfText(x+4,y-13-i*12,9,v));x+=widths[0];
+    [stats.K?.[p]||0,stats.rt?.[p]||0,stats.sv?.[p]||0,stats.he?.[p]||0,support[p]||0].forEach((v,i)=>{page+=pdfText(x+4,y-13,9,String(v));x+=widths[i+1];});
+    page+=pdfLinea(M,y-height,W-M,y-height);y-=height;
   }
-  const xrefStart = pdf.length;
-  pdf += `xref\n0 ${totalObjs+1}\n0000000000 65535 f \n`;
-  for(let i=1;i<=totalObjs;i++) pdf += String(offsets[i]).padStart(10,"0") + " 00000 n \n";
-  pdf += `trailer\n<< /Size ${totalObjs+1} /Root ${catalogNum} 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
-
-  const bytes = new Uint8Array(pdf.length);
-  for(let i=0;i<pdf.length;i++){ const c = pdf.charCodeAt(i); bytes[i] = c>255 ? 63 : c; }
-  return new Blob([bytes], {type:"application/pdf"});
+  y-=16;
+  const section=(title,entries)=>{ensure(40,"Regole e note - "+periodo);paragraph(title,11,true);for(const v of entries.length?entries:["Nessuna"])paragraph("• "+v,9);y-=8;};
+  section("Regole attive",descrizioneRegoleAttive());
+  section("Regole personalizzate",state.regoleCustom.map(etichettaRegolaCustom));
+  section("Indisponibilità",state.indisponibilita.map(etichettaIndisponibilita));
+  section("Profili personali",elencoProfiliPersonalizzati());
+  if(state.pianoInfo?.avvisiModifica?.length)section("Avvisi del piano",state.pianoInfo.avvisiModifica);
+  finish();
+  const objects=[];objects[0]='<< /Type /Catalog /Pages 2 0 R >>';
+  objects[1]=`<< /Type /Pages /Kids [${pages.map((_,i)=>`${5+i*2} 0 R`).join(' ')}] /Count ${pages.length} >>`;
+  objects[2]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objects[3]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  pages.forEach((stream,i)=>{objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${6+i*2} 0 R >>`);objects.push({stream});});
+  let pdf='%PDF-1.4\n',offsets=[0];objects.forEach((obj,i)=>{offsets.push(pdf.length);pdf+=`${i+1} 0 obj\n`+(obj.stream!==undefined?`<< /Length ${obj.stream.length} >>\nstream\n${obj.stream}\nendstream`:obj)+'\nendobj\n';});
+  const xref=pdf.length;pdf+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;offsets.slice(1).forEach(o=>pdf+=String(o).padStart(10,'0')+' 00000 n \n');
+  pdf+=`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new Blob([Uint8Array.from(pdf,c=>c.charCodeAt(0)>255?63:c.charCodeAt(0))],{type:'application/pdf'});
 }
+
 
 /* ---------- Salvataggio file ---------- */
 async function salvaFile(blob, nome){
@@ -3017,6 +3002,10 @@ function bloccaSeNonAggiornato(){
     renderRiepilogo();
     return true;
   }
+  const ctx={anno:state.anno,mese:state.mese,persone:state.persone,regole:state.regole,regoleCustom:state.regoleCustom,
+    personaIndisponibile:personaIndisponibileGlobale,fissi:state.fissi,continuita:continuitaMesePrecedente()};
+  const viol=validaPianoIndipendente(state.griglia,ctx);
+  if(viol.length&&!confirm("Il piano presenta avvisi:\n"+viol.map(v=>v.testo).join("\n")+"\n\nEsportarlo comunque?"))return true;
   msg.innerHTML = "";
   return false;
 }
@@ -3117,7 +3106,7 @@ function aggiornaOrientamentoStampa(){
 function renderAnteprimaPagina1(){
   const box = document.getElementById("anteprimaPagina1");
   if(!box) return;
-  let html = `<div class="anteprima-titolo">Anteprima — così apparirà la prima pagina (stampa, PDF, Word)</div>`;
+  let html = `<div class="anteprima-titolo">Anteprima della stampa e della struttura del calendario; il PDF adatta testi e pagine</div>`;
   html += htmlPagina1Turni();
   box.innerHTML = html;
 }
@@ -3197,7 +3186,7 @@ function initExport(){
           return;
         }
       }
-    }catch(e){ /* utente ha annullato o API non disponibile */ }
+    }catch(e){ if(e.name==="AbortError")return; }
     salvaFile(blob, nome);
   };
 }
@@ -3218,37 +3207,71 @@ function refreshUI(){
   renderAffPersonaSelect(); renderAffiancamenti();
   renderScelteStilePagina1(); aggiornaOrientamentoStampa();
   applicaDispositivo();
+  if(state.griglia && pianoAggiornato()) ricalcolaStatsDaGriglia();
   renderCalendario();
   renderRiepilogo();
+  renderArchivio();
 }
 function validaStrutturaBackup(d){
-  if(!d || typeof d!=="object") return "Il file non contiene un oggetto JSON valido.";
-  if(!Array.isArray(d.persone)) return "Campo 'persone' mancante o non valido.";
-  if(!Array.isArray(d.fissi)) return "Campo 'fissi' mancante o non valido.";
-  if(!Array.isArray(d.indisponibilita)) return "Campo 'indisponibilita' mancante o non valido.";
-  if(!d.regole || typeof d.regole!=="object") return "Campo 'regole' mancante o non valido.";
-  if(!Array.isArray(d.regoleCustom)) return "Campo 'regoleCustom' mancante o non valido.";
-  if(!Number.isInteger(d.mese) || d.mese<1 || d.mese>12) return "Campo 'mese' mancante o non valido.";
-  if(!Number.isInteger(d.anno)) return "Campo 'anno' mancante o non valido.";
+  const obj=x=>x!==null && typeof x==="object" && !Array.isArray(x);
+  const int=(x,min,max)=>Number.isInteger(x)&&x>=min&&x<=max;
+  if(!obj(d)) return "Il file non contiene un oggetto JSON valido.";
+  if(!int(d.mese,1,12)||!int(d.anno,2000,2100)) return "Periodo non valido (anni 2000–2100).";
+  if(!Array.isArray(d.persone)||!d.persone.every(n=>typeof n==="string"&&n.trim().length>0&&n.length<=120)) return "Elenco persone non valido.";
+  if(new Set(d.persone.map(normalizzaNome)).size!==d.persone.length) return "Nomi duplicati nell'elenco persone.";
+  const person=p=>typeof p==="string"&&d.persone.includes(p),role=r=>r==="CUCINA"||r==="SERVIZIO";
+  if(!Array.isArray(d.fissi)||!d.fissi.every(f=>obj(f)&&int(f.giorno,1,31)&&role(f.ruolo)&&person(f.nome))) return "Turni fissi non validi.";
+  if(d.affiancamenti!==undefined&&(!Array.isArray(d.affiancamenti)||!d.affiancamenti.every(f=>obj(f)&&int(f.giorno,1,31)&&role(f.ruolo)&&person(f.nome)))) return "Affiancamenti non validi.";
+  if(d.giorniSpeciali!==undefined&&(!Array.isArray(d.giorniSpeciali)||!d.giorniSpeciali.every(g=>obj(g)&&int(g.giorno,1,31)&&[g.cucina,g.servizio].every(a=>Array.isArray(a)&&a.every(person)&&new Set(a).size===a.length)&&(g.etichetta===undefined||(typeof g.etichetta==="string"&&g.etichetta.length<=500))))) return "Giorni speciali non validi.";
+  const seen=new Set();for(const f of d.fissi){const k=f.giorno+"|"+f.ruolo;if(seen.has(k))return "Turni fissi duplicati.";seen.add(k);}
+  if(!obj(d.regole)) return "Regole non valide.";
+  const defaults=STATO_INIZIALE.regole;
+  for(const [k,v] of Object.entries(d.regole)) if(k in defaults && (typeof v!==typeof defaults[k] || (typeof v==="number"&&!int(v,1,31)))) return "Valore regola non valido: "+k;
+  if(!Array.isArray(d.indisponibilita)||!d.indisponibilita.every(e=>{
+    if(!obj(e)||!person(e.persona)||!obj(e.params)) return false;const p=e.params;
+    return e.tipo==="SPECIFICA"?int(p.giorno,1,31):e.tipo==="RICORRENTE_GIORNO"?int(p.giornoSett,0,6):e.tipo==="INTERVALLO"?int(p.da,1,31)&&int(p.a,p.da,31):e.tipo==="MESE_RICORRENTE"?int(p.mese,1,12):e.tipo==="WEEKEND_RICORRENTE"?["primo","ultimo"].includes(p.quale):false;
+  })) return "Indisponibilità non valide.";
+  if(!Array.isArray(d.regoleCustom)||!d.regoleCustom.every(r=>{
+    if(!obj(r)||!obj(r.params)||!person(r.params.persona)) return false;const p=r.params;
+    return ["NON_CON","COPPIA_PREFERITA"].includes(r.tipo)?person(p.persona2)&&p.persona!==p.persona2:["NON_ASSEGNARE_GIORNO","PREFERENZA_DATA"].includes(r.tipo)?int(p.giorno,1,31):r.tipo==="MAX_TURNI"?int(p.max,1,62):["GIORNO_LIBERO","PREFERENZA_GIORNO_SETT"].includes(r.tipo)?int(p.giornoSett,0,6):false;
+  })) return "Regole personalizzate non valide.";
+  if(d.profili!==undefined&&(!obj(d.profili)||Object.entries(d.profili).some(([n,p])=>!person(n)||!obj(p)||["cucina","servizio","escluso"].some(k=>p[k]!==undefined&&typeof p[k]!=="boolean")||["minTurni","affCucinaRichiesti","affServizioRichiesti"].some(k=>p[k]!==undefined&&!int(p[k],0,1000))))) return "Profili non validi.";
+  const grid=(g,names)=>obj(g)&&Object.entries(g).every(([gg,day])=>int(Number(gg),1,31)&&obj(day)&&["CUCINA","SERVIZIO","affCucina","affServizio"].every(k=>day[k]==null||names.includes(day[k])));
+  if(d.griglia!=null&&!grid(d.griglia,d.persone)) return "Griglia non valida.";
+  if(d.storico!==undefined&&(!obj(d.storico)||Object.entries(d.storico).some(([k,v])=>!/^\d{4}-(?:[1-9]|1[0-2])$/.test(k)||!obj(v)||!Array.isArray(v.persone)||!v.persone.every(n=>typeof n==="string")||!grid(v.griglia,v.persone)||(v.giorniSpeciali!==undefined&&(!Array.isArray(v.giorniSpeciali)||!v.giorniSpeciali.every(g=>obj(g)&&int(g.giorno,1,31)&&[g.cucina,g.servizio].every(a=>Array.isArray(a)&&a.every(n=>v.persone.includes(n))))))))) return "Storico non valido.";
+  if(d.affiancamenti){const keys=d.affiancamenti.map(a=>a.giorno+"|"+a.ruolo);if(new Set(keys).size!==keys.length)return "Affiancamenti duplicati.";}
+  if(d.giorniSpeciali&&new Set(d.giorniSpeciali.map(g=>g.giorno)).size!==d.giorniSpeciali.length)return "Giorni speciali duplicati.";
+  if(d.stats!=null&&(!obj(d.stats)||["K","rt","sv","he"].some(k=>d.stats[k]!==undefined&&(!obj(d.stats[k])||Object.values(d.stats[k]).some(v=>!Number.isFinite(v)||v<0)))))return "Statistiche non valide.";
+  if(d.pianoInfo!=null&&!obj(d.pianoInfo))return "Informazioni del piano non valide.";
+  for(const [k,v] of Object.entries(d.storico||{}))if(v.input){
+    if(!obj(v.input))return "Input storico non valido.";
+    const [anno,mese]=k.split("-").map(Number);
+    if(v.input.anno!==anno||v.input.mese!==mese||JSON.stringify(v.input.persone)!==JSON.stringify(v.persone))return "Periodo o persone dello storico incoerenti.";
+    const err=validaStrutturaBackup({...v.input,griglia:null,stats:null,storico:{}});if(err)return "Input storico non valido: "+err;
+  }
+  for(const k of ["nomeProgetto","codiceVariante","skin","dispositivo","stilePagina1"]) if(d[k]!==undefined&&(typeof d[k]!=="string"||d[k].length>500)) return "Campo non valido: "+k;
   return null;
 }
+
 function initBackup(){
   document.getElementById("btnSalvaOra").onclick = ()=>{
-    salvaLocale();
-    document.getElementById("msgBackup").innerHTML = `<div class="msg ok">Progetto salvato nel browser.</div>`;
+    const ok=salvaLocale();
+    document.getElementById("msgBackup").textContent=ok?"Progetto salvato nel browser.":ultimoErroreSalvataggio;
   };
   document.getElementById("btnRicaricaLocale").onclick = ()=>{
-    caricaLocale();
+    if(!caricaLocale()){document.getElementById("msgBackup").textContent="Nessun salvataggio valido ricaricato.";return;}
     assicuraNomiMaiuscoli();
     migraNoConsecutivi();
     migraAffiancamenti();
+    migraVersione2();
     applicaSkin();
     refreshUI();
     document.getElementById("msgBackup").innerHTML = `<div class="msg ok">Ultimo salvataggio locale ricaricato.</div>`;
   };
-  document.getElementById("btnBackupJson").onclick = ()=>{
-    const blob = new Blob([JSON.stringify(state, null, 2)], {type:"application/json"});
-    salvaFile(blob, nomeFile("json"));
+  document.getElementById("btnBackupJson").onclick = async ()=>{
+    const data=new Date().toISOString();
+    const blob=new Blob([JSON.stringify({...state,ultimoBackupIl:data},null,2)],{type:"application/json"});
+    if(await salvaFile(blob,nomeFile("json"))){state.ultimoBackupIl=data;salvaLocale();aggiornaPromemoriaBackup();}
   };
   document.getElementById("inputImportJson").onchange = (e)=>{
     const file = e.target.files[0];
@@ -3261,21 +3284,20 @@ function initBackup(){
       catch(err){ msg.innerHTML = `<div class="msg bad">Il file non è un JSON valido.</div>`; e.target.value=""; return; }
       const errore = validaStrutturaBackup(d);
       if(errore){ msg.innerHTML = `<div class="msg bad">Backup non importato: ${escHtml(errore)}</div>`; e.target.value=""; return; }
-      state = Object.assign({
-        nomeProgetto:"", codiceVariante:"", profili:{}, skin:"chiaro", giorniSpeciali:[], griglia:null, stats:null,
-        pianoFingerprint:null, pianoInfo:null, storico:{}
-      }, d);
+      registraAnnullamento();
+      state = normalizzaBackup(d);
       if(!state.storico || typeof state.storico!=="object") state.storico = {};
       assicuraNomiMaiuscoli();
     migraNoConsecutivi();
     migraAffiancamenti();
+      migraVersione2();
       // Il piano importato viene mantenuto solo se coerente con gli input importati;
       // in caso contrario viene eliminato (struttura comunque "migrata" e valida).
       invalidaPianoSeNecessario();
       applicaSkin();
       salvaLocale();
       refreshUI();
-      msg.innerHTML = `<div class="msg ok">Backup importato correttamente.</div>`;
+      msg.textContent = ultimoErroreSalvataggio?"Backup importato, ma non salvato nel browser. "+ultimoErroreSalvataggio:"Backup importato correttamente.";
       e.target.value = "";
     };
     reader.readAsText(file);
@@ -3292,7 +3314,7 @@ const INFO_TEXT = {
   codiceVariante: "Se lo lasci vuoto, ogni volta che premi Genera ottieni un piano diverso. Se scrivi un codice a tua scelta, con dati identici otterrai sempre lo stesso identico piano: utile per poterlo ricreare in futuro o confrontare varianti.",
   continuitaMese: "Se hai già generato un piano per il mese precedente in questo stesso progetto, l'app lo ricorda e ne tiene conto: riposo minimo, distanza fra weekend e consecutività valgono anche a cavallo tra i due mesi, non solo dentro quello selezionato. Cambiando mese, questa continuità si aggiorna da sola.",
   backupProgetto: "\"Salva\" scarica una copia completa del progetto in un file, da tenere altrove o portare su un altro dispositivo. \"Carica\" rilegge quel file. \"Salva ora nel browser\" e \"Ricarica salvataggio locale\" riguardano invece solo il salvataggio automatico su questo dispositivo (il progetto si salva già da solo a ogni modifica). \"Elimina salvataggio locale\" cancella solo la copia nel browser, non i file scaricati con \"Salva\".",
-  profiliPersona: "Ruoli: se togli la spunta a Cucina o Servizio, quella persona non verrà mai messa su quel ruolo. Min turni: il generatore cerca di darle almeno quel numero di turni, ma è una preferenza, non una garanzia. Escludi: la persona resta in elenco ma non viene mai messa in turno finché non togli la spunta. Affiancamento richiesto: se impostato, la persona non può fare quel ruolo come turno normale finché non ha totalizzato almeno quel numero di giorni di affiancamento (programmati nella scheda Turni Fissi o col \"+ affiancamento\" nel calendario) in quel ruolo; sono vincoli obbligatori, contati su tutti i mesi che l'app ricorda, non solo su quello attuale.",
+  profiliPersona: "Ruoli: se togli la spunta a Cucina o Servizio, quella persona non verrà mai messa su quel ruolo. Min turni: il generatore cerca di darle almeno quel numero di turni, ma è una preferenza, non una garanzia. Escludi: la persona resta in elenco ma non viene mai messa in turno finché non togli la spunta. Affiancamento richiesto: se impostato, la persona non può fare quel ruolo come turno normale finché non ha totalizzato almeno quel numero di giorni di affiancamento (programmati nella scheda Turni Fissi o col \"+ affiancamento\" nel calendario) in quel ruolo; sono vincoli obbligatori: contano i mesi precedenti e gli affiancamenti programmati prima del turno, mai quelli successivi.",
   listaPersoneImportExport: "Salva scarica solo l'elenco dei nomi in un file, così puoi riusarlo in un altro progetto senza ridigitarli. Carica legge quel file e aggiunge i nomi che non hai già in elenco. Importa da TXT legge invece un file di testo semplice con un nome per riga, così:\nAnna\nMarco\nSara\n...\nSe il file non è in questo formato, l'importazione si ferma con un errore e non cambia nulla. In entrambi i casi i nomi già presenti (anche scritti con maiuscole o spazi diversi) vengono saltati, non duplicati.",
   indisponibilitaTipi: "Vincolo obbligatorio: la persona non potrà mai essere assegnata (cucina o servizio) nelle date individuate. Data specifica: un solo giorno. Giorno della settimana ricorrente: es. sempre libera il lunedì. Intervallo: un periodo continuo (es. ferie). Mese ricorrente: tutto il mese selezionato, ogni anno. Weekend ricorrente: il primo o l'ultimo weekend del mese.",
   turniFissi: "Un turno fisso assegna un ruolo a una persona precisa in un giorno preciso: il generatore lo rispetta sempre, anche a costo di violare altre regole. Usalo per accordi già presi.",
@@ -3301,17 +3323,17 @@ const INFO_TEXT = {
   regolaNoDoppio: "Una stessa persona non può fare sia CUCINA che SERVIZIO nello stesso giorno.",
   regolaRiposoMinimo: "Impedisce due turni troppo vicini alla stessa persona: con 1 giorno, niente giorni consecutivi (nessuna pausa in mezzo); con 2 o 3, richiede più giorni di pausa tra un turno e l'altro. Attiva di default con 1 giorno.",
   regolaNoStessoWeekend: "Chi lavora il sabato di un weekend non viene messo anche la domenica dello stesso weekend (e viceversa).",
-  regolaMaxSettimana: "Limita quante volte una persona può essere in turno nella stessa settimana (lunedì-domenica).",
-  regolaMaxWeekend: "Limita quanti weekend (sabato o domenica) una persona può lavorare nell'intero mese.",
+  regolaMaxSettimana: "Limita i giorni di presenza nella stessa settimana (lunedì-domenica), includendo affiancamenti, squadre e giorni del mese precedente.",
+  regolaMaxWeekend: "Limita i weekend distinti con almeno una presenza, includendo affiancamenti e squadre.",
   regolaDistanzaWeekend: "Dopo aver lavorato un weekend, la persona deve saltarne almeno un certo numero prima di poter lavorare il weekend successivo.",
   regolaEvitaGiornoSett: "Preferenza (non obbligo): evita che una persona finisca sempre a lavorare, ad esempio, ogni mercoledì del mese. Dopo 2 volte nello stesso giorno della settimana il generatore prova a scegliere qualcun altro, ma se non ci sono alternative valide può assegnarla lo stesso.",
   regolaWeekendEqui: "Preferenza (non obbligo): il generatore cerca di dare a tutti un numero simile di weekend lavorati.",
   regolaBilanciamento: "Preferenza (non obbligo): il generatore cerca di alternare CUCINA e SERVIZIO per ogni persona, invece di darle sempre lo stesso ruolo.",
   regolePersonalizzate: "Non assegnare a un giorno / Coppia da evitare / Giorno libero ricorrente sono vincoli obbligatori. Numero massimo turni totali è un vincolo obbligatorio sul totale. Coppia preferita, preferenza data e preferenza giorno della settimana sono invece preferenze: il generatore le asseconda quando può, senza garanzie. Se imposti sia un vincolo che la preferenza opposta per la stessa persona/coppia/giorno, il vincolo vince sempre (te lo segnalo con un avviso).",
   prioritaRegole: "Quando più regole si toccano, l'ordine è sempre lo stesso: 1) i turni fissi vengono prima di tutto e non si toccano mai; 2) i vincoli obbligatori (ruoli consentiti, esclusione, indisponibilità, le regole standard che spunti qui, e le regole personalizzate vincolanti) filtrano chi può essere assegnato; 3) le preferenze (coppia preferita, preferenza data/giorno, minimo turni desiderato, evita stesso giorno della settimana, weekend equi, bilanciamento) influenzano solo la scelta tra chi resta valido, senza garanzie. Duplicati esatti vengono bloccati subito; le regole in contraddizione fra loro restano permesse ma ricevono un avviso dopo la generazione.",
-  generaPiano: "Il generatore prova migliaia di combinazioni casuali (partendo dal codice variante, se impostato) e tiene la migliore trovata rispettando tutte le regole obbligatorie attive. \"Proponi una variante diversa\" ripete il procedimento con un nuovo codice casuale, senza cambiare nient'altro. Dopo la generazione, nel calendario ogni nome è un menu a tendina: toccalo per cambiarlo a mano, oppure tocca 🔓 per trasformare l'assegnazione attuale in un turno fisso. Se una modifica a mano viola una regola obbligatoria te lo chiedo prima di applicarla, così puoi decidere se forzarla o no; se viola solo una preferenza, viene applicata subito con un avviso.",
-  exportFormati: "Word ed Excel: documenti pronti da consultare o modificare. PDF: due pagine pronte per la stampa. Stampa: apre la stampa del browser con un layout pulito. Condividi: invia il PDF con le app del dispositivo, se disponibile.",
-  stilePagina1: "Scegli come vuoi vedere tutti i turni del mese nella prima pagina di Stampa, PDF e Word: \"Griglia calendario\" li mostra come il calendario a schermo (una settimana per riga); \"Elenco giorni\" li mostra come una lista, un giorno per riga, con data e giorno della settimana. In entrambi i casi occupa tutta la larghezza del foglio con carattere grande, e il riepilogo/le regole iniziano sempre in una pagina a parte. L'anteprima qui sotto mostra esattamente cosa verrà stampato.",
+  generaPiano: "Il generatore prova migliaia di combinazioni casuali (partendo dal codice variante, se impostato) e tiene la migliore trovata rispettando tutte le regole obbligatorie attive. \"Proponi una variante diversa\" ripete il procedimento con un nuovo codice casuale, senza cambiare nient'altro. Il calcolo avviene separatamente e può essere annullato. Dopo la generazione, nel calendario ogni nome è un menu a tendina: toccalo per cambiarlo a mano, oppure tocca 🔓 per trasformare l'assegnazione attuale in un turno fisso. Se una modifica a mano viola una regola obbligatoria te lo chiedo prima di applicarla, così puoi decidere se forzarla o no; se viola solo una preferenza, viene applicata subito con un avviso.",
+  exportFormati: "Word ed Excel: documenti pronti da consultare o modificare. PDF: pagine automatiche, con dettagli completi dei giorni speciali e degli affiancamenti. Stampa: apre la stampa del browser con un layout pulito. Condividi: invia il PDF con le app del dispositivo, se disponibile.",
+  stilePagina1: "Scegli come vuoi vedere tutti i turni del mese nella prima pagina di Stampa, PDF e Word: \"Griglia calendario\" li mostra come il calendario a schermo (una settimana per riga); \"Elenco giorni\" li mostra come una lista, un giorno per riga, con data e giorno della settimana. Il PDF adatta automaticamente righe e pagine e aggiunge dettagli completi quando i nomi non entrano nella griglia. Il riepilogo inizia su una pagina separata. L'anteprima rappresenta la stampa del browser.",
   dispositivoConfig: "Regola la larghezza del contenuto e la dimensione generale di testo e pulsanti in base allo schermo che stai usando. \"Automatico\" sceglie da solo Smartphone, Tablet o Computer guardando quanto è larga la finestra in questo momento, e si aggiorna se la ridimensioni. Le altre opzioni restano fisse indipendentemente dallo schermo, anche \"Minimal\", pensato per chi vuole il minimo ingombro possibile (nasconde le note esplicative e riduce gli spazi)."
 };
 
@@ -3459,6 +3481,55 @@ function initContatti(){
   backdrop.onclick = (e)=>{ if(e.target===backdrop) backdrop.classList.remove("show"); };
 }
 
+
+const undoStack=[],redoStack=[];
+function registraAnnullamento(prima=state){undoStack.push(JSON.parse(JSON.stringify(prima)));if(undoStack.length>20)undoStack.shift();redoStack.length=0;aggiornaUndo();}
+function aggiornaUndo(){for(const [id,stack] of [["btnUndo",undoStack],["btnRedo",redoStack]]){const b=document.getElementById(id);if(b)b.disabled=!stack.length;}}
+function spostaAnnullamento(redo){
+  const da=redo?redoStack:undoStack,a=redo?undoStack:redoStack;if(!da.length)return;
+  a.push(JSON.parse(JSON.stringify(state)));state=da.pop();salvaLocale();refreshUI();aggiornaUndo();
+  document.getElementById("msgGenera").textContent=redo?"Modifica ripristinata.":"Modifica annullata.";
+}
+function cambiaPeriodo(anno,mese){
+  if(anno===state.anno&&mese===state.mese)return;
+  if(pianoAggiornato())salvaNelloStorico();
+  state.anno=anno;state.mese=mese;invalidaPianoSeNecessario();salvaLocale();refreshUI();
+}
+function aggiornaPromemoriaBackup(){
+  const box=document.getElementById("promemoriaBackup");if(!box)return;
+  const data=Date.parse(state.ultimoBackupIl||"");
+  box.hidden=!state.persone.length || (Number.isFinite(data)&&Date.now()-data<7*24*3600*1000);
+  box.textContent="Consigliato: scarica una copia del progetto con Salva. Il salvataggio nel browser può essere cancellato insieme ai dati del sito.";
+}
+function renderArchivio(){
+  aggiornaPromemoriaBackup();
+  const sel=document.getElementById("archivioMese");if(!sel)return;sel.replaceChildren();
+  Object.keys(state.storico||{}).sort((a,b)=>{const x=a.split("-").map(Number),y=b.split("-").map(Number);return y[0]*12+y[1]-x[0]*12-x[1];}).forEach(k=>{
+    const opt=document.createElement("option");opt.value=k;const [a,m]=k.split("-").map(Number);opt.textContent=MESI[m]+" "+a;sel.appendChild(opt);
+  });
+  document.getElementById("btnRipristinaMese").disabled=!sel.options.length;
+}
+function ripristinaMese(){
+  const k=document.getElementById("archivioMese").value,voce=state.storico[k];if(!voce)return;
+  if(!voce.input){document.getElementById("msgBackup").textContent="Piano di una versione precedente: lo storico resta disponibile per continuità e affiancamenti, ma mancano gli input per ripristinarlo.";return;}
+  registraAnnullamento();const storico=state.storico,preferenze={skin:state.skin,dispositivo:state.dispositivo,stilePagina1:state.stilePagina1,nomeProgetto:state.nomeProgetto};
+  state=Object.assign(normalizzaBackup(voce.input),preferenze,{storico,griglia:JSON.parse(JSON.stringify(voce.griglia)),pianoInfo:voce.pianoInfo||{}});
+  state.pianoFingerprint=fingerprintDi(datiRilevantiPiano());ricalcolaStatsDaGriglia();rivalidaDopoModificaManuale();salvaLocale();refreshUI();
+  document.getElementById("msgBackup").textContent="Piano archiviato ripristinato. I vincoli sono stati ricontrollati.";
+}
+
+function migraVersione2(){
+  if(state.versioneDati===2)return;
+  if(state.griglia){
+    const input=JSON.parse(datiRilevantiPiano());delete input.storicoRilevante;
+    if(state.pianoFingerprint===fingerprintDi(JSON.stringify(input))){
+      state.pianoFingerprint=fingerprintDi(datiRilevantiPiano());
+      ricalcolaStatsDaGriglia();rivalidaDopoModificaManuale();salvaNelloStorico();
+    }
+  }
+  state.versioneDati=2;
+}
+
 /* ======================= AVVIO ======================= */
 caricaLocale();
 assicuraNomiMaiuscoli();
@@ -3466,7 +3537,9 @@ assicuraNomiMaiuscoli();
     migraAffiancamenti();
 applicaSkin();
 applicaDispositivo();
+migraVersione2();
 invalidaPianoSeNecessario();
+if(state.griglia)ricalcolaStatsDaGriglia();
 initTabs();
 initMese();
 initPersone();
@@ -3479,6 +3552,8 @@ initRegole();
 initGenera();
 initExport();
 initBackup();
+document.getElementById("btnRipristinaMese").onclick=ripristinaMese;
+renderArchivio();
 initInfoEAiuto();
 initConfig();
 initContatti();
